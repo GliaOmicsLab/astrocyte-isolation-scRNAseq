@@ -15,11 +15,10 @@ The results were compared between protocols:
 -	**Miltenyi** – a standardized commercial protocol utilizing automated papain-based dissociation, and high-speed (3000 x g)density-gradient centrifugation for debris removal. 
 -	**WorthMech** – an in-house high-shear control variant identical to WorthGentle, but utilizing standard-bore pipette tips to isolate the specific impact of physical shear stress. 
  
-### Samples - cortical tissue was collected from ** female and male mouse models** across three experimental groups:
-			- **control** - C57Bl/6J mice
-			- **permanent middle cerebral artery occlusion** - C57Bl/6J mice with tissues harvestd 7 days post-stroke 
-			- **tauopathy** - transgenic mice expressing human P301S tau [Tg(Thy1-MAPT*P301S)2541Godt]
-
+### Samples - cortical tissue was collected from female and male mouse models across three experimental groups:
+- **control** - C57Bl/6J mice
+- **permanent middle cerebral artery occlusion** - C57Bl/6J mice with tissues harvestd 7 days post-stroke 
+- **tauopathy** - transgenic mice expressing human P301S tau [Tg(Thy1-MAPT*P301S)2541Godt]
 ---
 
 ## Data processing 

@@ -1,0 +1,589 @@
+---
+title: "2V_02_astro_aubset"
+author: "Dominika Dostalova"
+date: "2025-05-26"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# Visualisation
+This script handles the data visualization for the outputs generated in the `1DP_02_astro_subset` R Markdown file.
+
+```{r}
+suppressMessages(library("Matrix"))
+suppressMessages(library("NormExpression"))
+suppressMessages(library("DropletUtils"))
+suppressMessages(library("pheatmap"))
+suppressMessages(library("RColorBrewer"))
+suppressMessages(library("ggplot2"))
+suppressMessages(library("Seurat"))
+suppressMessages(library("sctransform"))
+suppressMessages(library("DT"))
+suppressMessages(library("scales"))
+suppressMessages(library("ggrepel"))
+suppressMessages(library("dplyr"))
+suppressMessages(library("SeuratWrappers"))
+suppressMessages(library("scmap"))
+suppressMessages(library("DoubletFinder"))
+suppressMessages(library("scCATCH"))
+suppressMessages(library("reshape2"))
+suppressMessages(library("ComplexHeatmap"))
+suppressMessages(library("here"))
+suppressMessages(library("gridExtra"))
+suppressMessages(library("clustree"))
+suppressMessages(library("magrittr"))
+suppressMessages(library("patchwork"))
+suppressMessages(library("purrr"))
+suppressMessages(library("ggpubr"))
+suppressMessages(library("tidyr"))
+suppressMessages(library("stringr"))
+library(dittoSeq)
+plots <- list()
+col_list <- list()
+orders <- list()
+source("code/0F_01_colours_orders.R", local = F, echo = F, print.eval = F)
+source("code/0F_02_general_functions.R", local = F, echo = F, print.eval = F)
+source("code/0F_03_label_names.R", local = F, echo = F, print.eval = F)
+gene_symbol <- read.table("data/all_genes.csv", header = TRUE, sep = ",")
+```
+
+```{r}
+seurat_object <- readRDS("ws/02_astro_subset/1DP_02_seurat_annotated_astro.rds")
+```
+
+#UMAP cell type
+```{r}
+plots[["UMAP_all"]] <- DimPlot(seurat_object, group.by = "seurat_annotated_astro", cols = col_list[["UMAP_astro"]], pt.size = 0.1) + 
+  #ggtitle(get_label("sc_astro"))+
+  labs(color = get_label("cell_types"))+
+  theme(
+    text = element_text(size = 6),
+    legend.position = "bottom", # Position the legend at the bottom
+    legend.justification.bottom = c(0.5, 0.5),
+    legend.text = element_text(size = 6, margin = margin(t = 0, r = 0, b = -1, l = 1)),    # Optional: adjust legend text size
+    legend.key.spacing.y = unit(0, "mm"),
+    legend.key.spacing.x = unit(1, "mm"),
+    legend.margin = margin(t = 0, r = 0, b = 0, l = 0),  # Margins around the legend,
+    plot.margin = margin(0, 0, 2, 0),
+    strip.text = element_text(size = 6),
+    plot.title = element_blank(), #element_text(hjust = 0.5, size = 6, vjust = 0, face = "plain"),
+    legend.key.size = unit(2.5, "mm"),      # Control overall legend key size
+    legend.background = element_blank()
+  )  & 
+  guides(color = guide_legend(override.aes = list(size = 1)))&
+  NoAxes()
+
+plots[["UMAP_all"]]
+
+ggsave(
+  filename = "results/02_astro_subset/2V_02_UMAP_astro.tiff",              # Name of the file
+  plot = plots[["UMAP_all"]],          # The plot object to save
+  device = "tiff",                          # Specify the output format (png, pdf, svg)
+  width = 3,                              # Width of the image
+  height = 3.5,                              # Height of the image -2 cm more if it with labels of letters
+  units = "cm",                            # Units for width and height 
+  dpi = 600,            
+  compression = "lzw",  
+  bg = "white" 
+)
+```
+
+```{r}
+#n cells
+ncol(seurat_object)
+```
+
+
+
+#UMAP isolation methods
+```{r}
+seurat_object
+ncol(seurat_object)
+table(seurat_object$Condition)
+
+for (condition in c("Ctrl", "Tau", "MCAO")) {
+  plots[[paste0("UMAP_", condition)]] <- DimPlot(
+    seurat_object,
+    cols = col_list[["isol_prot"]],
+    pt.size = 0.1,
+    group.by = "Isolation_pub",
+    cells = rownames(seurat_object@meta.data[seurat_object$Condition == condition, ])
+  ) + ggtitle(condition)
+}
+
+plots[["UMAP_group"]] <- wrap_plots(plots[["UMAP_Ctrl"]], plots[["UMAP_Tau"]], plots[["UMAP_MCAO"]]) +
+  plot_layout(ncol = 1, guides = "collect") &
+    theme(
+    text = element_text(size = 6),
+    legend.position = "bottom", # Position the legend at the bottom
+    legend.justification.bottom = c(0.5, 0.5),
+    legend.text = element_text(size = 6, margin = margin(t = 0, r = 0, b = -1, l = 1)),    # Optional: adjust legend text size
+    legend.key.spacing.y = unit(0, "mm"),
+    legend.key.spacing.x = unit(1, "mm"),
+    legend.margin = margin(t = 0, r = 0, b = 0, l = 0),  # Margins around the legend,
+    plot.margin = margin(0, 0, 2, 0),
+    strip.text = element_text(size = 6),
+    plot.title = element_text(hjust = 0.5, size = 6, vjust = 0, face ="plain"),
+    legend.key.size = unit(2.5, "mm"),      # Control overall legend key size
+    legend.background = element_blank()
+  )  & 
+  guides(color = guide_legend(
+    title = get_label("Isolation_pub_2l"),
+    nrow = 3,
+    override.aes = list(size = 1)))&
+  NoAxes()
+
+
+plots[["UMAP_group"]]
+
+#save it 
+ggsave(
+  filename = "results/02_astro_subset/2V_02_UMAP_astro_isotype.tiff",              # Name of the file
+  plot = plots[["UMAP_group"]],          # The plot object to save
+  device = "tiff",                          # Specify the output format (png, pdf, svg)
+  width = 3,                              # Width of the image
+  height = 10,                              # Height of the image -2 cm more if it with labels of letters
+  units = "cm",                            # Units for width and height 
+  dpi = 600,            
+  compression = "lzw",  
+  bg = "white" 
+)
+```
+
+
+# Dot plot with markers
+```{r}
+markers_astro <- c("Luzp2","Trpm3","Slc7a10","Gpc5","Lsamp", # Gfap-low, Habib2020
+                   "Gfap", "Vim", "Cst3", "Igfbp5", "Aqp4","C4b","Ctsb") # Gfap-high/DAA
+
+plots[["dotplot"]] <- DotPlot(
+  seurat_object, 
+  group.by =  "seurat_annotated_astro",
+  features = Symbol_to_ENSEMBL(markers_astro), 
+  dot.min = 0.10 
+)
+
+# 1. Native ggplot adjustment: Swap out layer 1 for border control
+plots[["dotplot"]]$layers[[1]] <- geom_point(
+  aes(size = pct.exp, fill = avg.exp.scaled), 
+  shape = 21, 
+  color = "black", 
+  stroke = 0.2
+)
+
+# 2. Re-apply scales, themes, and coordinates
+plots[["dotplot"]] <- plots[["dotplot"]] + 
+  scale_x_discrete(labels = ENSEMBL_to_Symbol(Symbol_to_ENSEMBL(markers_astro))) + 
+  theme_mk_title + 
+  remove_grid + 
+  #labs(title = get_label("sc_astro")) + 
+  theme(
+    axis.text.x = element_text(angle = 310, vjust = +0.1, hjust = +0.2, size = 6), 
+    axis.text.y = element_text(hjust = 0, vjust = 0.5, size = 6, face = "italic"), 
+    axis.title.x = element_blank(),                                 
+    axis.title.y = element_blank(),                                 
+    legend.position = "right",                                    
+    plot.margin = margin(2,2,2,2),                                  
+    legend.justification.bottom = c(1,0),
+    legend.box.spacing = unit(0.1, "cm"),
+    legend.box.just = "left",
+    legend.key.width = unit(2.5, "mm")
+  ) +
+  # 3. Changed from color to fill to colorize the inside of the shape
+  scale_fill_gradientn(
+    name = "Scaled \naverage \ngene \nexpression",   
+    colors = col_list[["gradient_comp"]]            
+  ) +
+  scale_size_continuous(
+    name = "Pergentage \nof cells \n(%)",
+    range = c(0.5, 2),
+    limits =c(0,100),
+    breaks = c(10, 50, 100)
+  ) +
+  # 4. Changed guide to target 'fill' instead of 'color'
+  guides(
+    fill = guide_colorbar(title.position = "left"), 
+    size = guide_legend(title.position = "left")     
+  ) +
+  coord_flip()
+
+# Display the updated canvas
+plots[["dotplot"]]
+
+#Save it 
+ggsave(
+  filename = "results/02_astro_subset/2V_02_dotplot_astro.tiff",              
+  plot = plots[["dotplot"]],          
+  device = "tiff",                          
+  width = 4.5,                             
+  height = 3.9,                              
+  units = "cm",
+  dpi = 600,            
+  compression = "lzw",  
+  bg = "white" 
+)
+```
+
+# Stacked barplot
+```{r}
+Idents(seurat_object) <- "seurat_annotated_astro"
+# Fig. 2C
+df_bar <- dittoBarPlot(seurat_object, var = "ident", group.by = "Isolation_pub", data.out = T, split.by = "Condition")
+df_bar <- df_bar$data
+df_bar$label <- factor(df_bar$label, levels = levels(seurat_object))
+df_bar$grouping <- factor(df_bar$grouping, levels = levels(as.factor(seurat_object$Isolation_pub)))
+
+plots[["stacked_bar_astro"]] <- ggplot(df_bar, aes(x = grouping, y = percent*100, fill = label)) +
+  geom_bar(position = "stack", stat = "identity", color = "#2d1800", size = 0.3 ) + 
+  
+  # =========================================================================
+  # THIS IS WHERE THE % IS PLACED ON TOP AND WHERE YOU CHANGE THE FONT SIZE
+  # =========================================================================
+  geom_text(
+    aes(
+      label = ifelse(label == "Reac", paste0(round(percent * 100), "%"), ""),
+      y = 100        # <-- Places the percentage baseline at the absolute top (100%)
+    ),
+    vjust = -0.5,    # <-- Pushes the text right above the top border line
+    size = 1.4,      # <-- CHANGE THIS NUMBER TO ADJUST THE FONT SIZE (e.g., 1.5)
+    color = "black"
+  ) +
+  
+  facet_grid(. ~ Condition) +
+  scale_fill_manual(values = col_list[["UMAP_astro"]]) +  
+  labs(x = "Samples", y = get_label("relat_prop_cells"), fill = get_label("cell_types")) +
+  
+  theme_mk_title +
+  
+  # Expanded the upper limit slightly to 115 so your text labels don't get cut off
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.15)),               
+    breaks = seq(0, 100, by = 20)
+  ) +  
+  remove_grid +
+  #labs(title = get_label("sc_astro")) +
+  theme(
+    strip.text = element_text(size = 6),        
+    strip.background = element_blank(),         
+    legend.position = "bottom",
+    legend.margin = margin(t = -7.5),
+    plot.margin = margin(3,12,3,3),
+    axis.text.x = element_text(angle = 310, vjust = +0.1, hjust = +0.2),
+    axis.title.x = element_blank(), 
+    plot.title = element_text(vjust = -5)
+  )
+
+plots[["stacked_bar_astro"]]
+
+# Save it
+ggsave(
+  filename = "results/02_astro_subset/2V_02_stacked_barplot.tiff",              
+  plot = plots[["stacked_bar_astro"]],          
+  device = "tiff",                          
+  width = 5.2,                             
+  height = 4.5,                              
+  units = "cm",
+  dpi = 600,            
+  compression = "lzw",  
+  bg = "white" 
+)
+
+```
+
+
+#Feature plot
+```{r}
+gene_set <- Symbol_to_ENSEMBL(c("Rpl36-ps3", "Gfap", "Vim", "Clu", "Igfbp5", "Id3", "Gsn", "Cd9", "Fxyd1", 
+  "Ctsb", "Apoe", "C4b", "Kcnip4", "Plce1", "Cst3", "Ggta1", "Serpina3n", 
+  "S100a6", "Cnn3", "Mt2", "Mt1", "Hsd17b4", "Mlc1", "Osmr", "Thbs4", "Aqp4", 
+  "Csmd1", "Sbno2", "B2m", "Cd81", "Enox1", "Matn4", "Cd63", "Id4", "Cpne8", 
+  "Ifitm3", "Serping1", "Ctsd", "Scd2", "Cav2", "Slc38a1", "Ftl1", "Atp1b2", 
+  "Prdx6", "Chl1", "Aspg", "Sparc", "Tmem47", "Sorbs1", "Dbi", "Itm2c", "Mgst1", 
+  "Arhgap6", "Ckb", "Tmbim6", "Ndufv3", "Chil1", "Tagln3", "Prune2", "Tspan3", 
+  "Ftl1-ps1", "Chst2", "Serpinf1", "S100a16", "Dhrs1", "Angpt1", "Id1", "Gstm1", 
+  "Fos", "Aebp1", "Sulf1", "S1pr3", "Tmem176a", "Tmem176b", "Cadps", "Prdx1", 
+  "Gm14964", "Cpe", "Lamp1", "Man1a", "Glis3", "Sulf2", "Lgals1", "Nrg2", 
+  "Ctsl", "Cd151", "Laptm4a", "Ddr1", "Gadd45g", "S100a1", "Slc16a1", "Aldoc", 
+  "Ntrk2", "Sdc4", "Tspan4", "Gpr37l1", "Fbxo2", "Erbin", "S100b", "Slc35f1", 
+  "Nfe2l2", "Pdia4", "Ccn1", "Cebpb", "Add3", "Slc14a1", "Cacnb2", "Sgcd", 
+  "Hist1h2bc", "Pdpn", "Psap", "Tst", "Bcap31", "Shisa6", "Hspa5", "Pdlim4", 
+  "H2-K1", "Clic1", "Tubb2b", "Ezr")) #habib2020_up
+
+seurat_scored <- AddModuleScore(seurat_object, features = list(gene_set), assay = "RNA", name = "reference_score_")
+plots[["DAA"]]<- FeaturePlot(seurat_scored, features = "reference_score_1", min.cutoff = "q10", max.cutoff = "q90", reduction = "umap", order = T) +
+  ggtitle("DAA *") +
+  NoAxes() +
+  theme(plot.title = element_text(size = 6, face = "plain"),
+     strip.text = element_blank(),
+      legend.position = "bottom",             # Position the legend at the bottom
+       legend.justification = "center",         # Centers the legend itself
+       legend.box.just = "center",              # Aligns the legend box to center
+      legend.title = element_text(size = 6),  # Adjust legend title size
+      legend.text = element_text(size = 6, margin = margin(t = 1)),   # Adjust legend text size
+     legend.margin = margin(t = -15),
+      plot.margin = margin(0, 0, 4, 0),
+      legend.key.size = unit(1.2, "mm")
+    ) +
+    scale_color_gradientn(
+      name = get_label("avrg_exp"),          # Manually set the color legend title
+      colors = col_list[["gradient_comp"]],
+      breaks = c(0.1, 0.3)
+      )
+
+gene_set <- Symbol_to_ENSEMBL(c("Trpm3", "Gpc5", "Slc7a10", "Nnat", "Upf2", "St6galnac5", "Luzp2", 
+  "Gm3764", "Pcyt2", "Mgat4c", "Lsamp", "Gria2", "Kirrel3", "Cdh10"))#habib2020_down
+
+
+seurat_scored <- AddModuleScore(seurat_object, features = list(gene_set), assay = "RNA", name = "reference_score_")
+plots[["Gfap_low"]] <- FeaturePlot(seurat_scored, features = "reference_score_1", min.cutoff = "q10", max.cutoff = "q90", reduction = "umap", order = T) +
+  ggtitle("Gfap-low *") +
+  NoAxes()+
+  theme(plot.title = element_text(size = 6, face = "plain"),
+     strip.text = element_blank(),
+      legend.position = "bottom",             # Position the legend at the bottom
+     legend.justification = "center",         # Centers the legend itself
+       legend.box.just = "center",  
+      legend.title = element_text(size = 6),  # Adjust legend title size
+      legend.text = element_text(size = 6, margin = margin(t = 1)),   # Adjust legend text size
+     legend.margin = margin(t = -15),
+      plot.margin = margin(0, 0, 4, 0),
+      legend.key.size = unit(1.2, "mm")
+    )+
+    scale_color_gradientn(
+      name = get_label("avrg_exp"),          # Manually set the color legend title
+      colors = col_list[["gradient_comp"]],
+      breaks = c(1.0, 1.6)
+      )
+
+shared_title <- textGrob(
+ get_label("sc_astro"), 
+  gp = gpar(fontsize = 6),
+  hjust = 0.5, # Centers the text
+  vjust = 0
+)
+plots[["DAA_Gfap_low"]]<- grid.arrange( plots[["Gfap_low"]], plots[["DAA"]], ncol = 2)# top= shared_title
+
+
+ggsave(
+  filename = "results/02_astro_subset/2V_02_featureplot.tiff",              
+  plot = plots[["DAA_Gfap_low"]],          
+  device = "tiff",                          
+  width = 4.5,                             
+  height = 3.5,                              
+  units = "cm",
+  dpi = 600,            
+  compression = "lzw",  
+  bg = "white" 
+)
+```
+
+
+# Bar plot with real numbers
+```{r}
+# Load your targeted MCAO data summary
+cell_summary <- readRDS("ws/02_astro_subset/1DP_02_Gfap_cell_summary.rds")
+
+# FIXED: Change references from 'sample' to 'Isolation_pub'
+cell_summary$Percent_Integer <- round(cell_summary$Percent_Gene_Positive)
+
+# Define pairwise comparisons
+comparisons <- list(
+  c("WorthMech", "Miltenyi"),
+  c("WorthGentle", "WorthMech"),
+  c("WorthGentle", "Miltenyi")
+)
+
+# Run Fisher test for each comparison
+pval_df <- do.call(rbind, lapply(comparisons, function(pair) {
+  group1 <- pair[1]
+  group2 <- pair[2]
+
+  # FIXED: Target the correct Isolation_pub column name here
+  data1 <- cell_summary[cell_summary$Isolation_pub == group1, ]
+  data2 <- cell_summary[cell_summary$Isolation_pub == group2, ]
+
+  contingency_table <- matrix(c(
+    data1$Expressing_Cells, data1$Total_Cells - data1$Expressing_Cells,
+    data2$Expressing_Cells, data2$Total_Cells - data2$Expressing_Cells
+  ), nrow = 2, byrow = TRUE)
+
+  p <- fisher.test(contingency_table)$p.value
+
+  data.frame(group1 = group1, group2 = group2, p.value = p)
+}))
+
+# Adjust p-values
+pval_df$p.adj <- p.adjust(pval_df$p.value, method = "BH")
+
+# Add significance stars
+pval_df$p.adj.signif <- sapply(pval_df$p.adj, function(p) {
+  if (p < 0.0001) return("***") # Cleaned up significance breakpoints
+  else if (p < 0.001) return("***")
+  else if (p < 0.01) return("**")
+  else if (p < 0.05) return("*")
+  else return("ns")
+})
+
+# Add y positions for each bracket
+pval_df$y.position <- c(1380, 1250, 1150)
+
+# ==========================================
+# GENERATE THE BAR PLOT
+# ==========================================
+# FIXED: Changed the x axis mapping to target 'Isolation_pub'
+plots[["bar_plot"]] <- ggplot(cell_summary, aes(x = Isolation_pub, y = Total_Cells)) +
+  geom_bar(aes(fill = "Aldh1l1+"), stat = "identity", color = "#2d1800", size = 0.3) +  
+  geom_bar(aes(y = Expressing_Cells, fill = "Gfap+"), color = "#2d1800", stat = "identity", size = 0.3) +  
+  geom_text(aes(y = Expressing_Cells + 50, label = paste0(Percent_Integer, "%")), size = 2, vjust = 0) +  
+  
+  ggpubr::stat_pvalue_manual(
+    pval_df,
+    label = "p.adj.signif",
+    tip.length = 0.01,
+    size = 2.2
+  ) +
+  theme_mk_title +
+  labs(
+    title = get_label("our_sc_astro_mcao"),
+    y = "Number of cells",
+    fill = get_label("cell_types")
+  ) +
+  remove_grid +
+  theme(
+    axis.text.x = element_text(angle = 310, vjust = +0.1, hjust = +0.2),
+    axis.title.x = element_blank(),
+    legend.position = "right"
+  ) +
+  scale_fill_manual(
+    values = col_list[["bar_plot"]],
+    labels = c(
+      "Aldh1l1+" = get_label("Aldh1l1+"), 
+      "Gfap+" = get_label("Gfap+")
+    )
+  ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1450)) 
+
+plots[["bar_plot"]]
+
+# Save the plot
+ggsave(
+  filename = "results/02_astro_subset/2V_02_barplot_with_real_numbers.tiff",              
+  plot = plots[["bar_plot"]],          
+  device = "tiff",                          
+  width = 4.8,                             
+  height = 4.5,                              
+  units = "cm", 
+  dpi = 600,            
+  compression = "lzw",  
+  bg = "white" 
+)
+
+```
+
+#UMAP divided into isolation protocol
+```{r}
+samples_to_find    <- c("Miltenyi", "Gentle", "Aggressive" ) 
+conditions_in_data <- c("Ctrl", "Tau", "MCAO") 
+
+sample_labels    <- c("Miltenyi" = "Miltenyi", 
+                      "Gentle" = "WorthGentle", 
+                      "Aggressive" = "WorthMech"
+                      )
+
+condition_labels <- c("Ctrl" = "Ctrl", 
+                      "Tau"  = "Tau", 
+                      "MCAO" = "MCAO")
+
+plot_list <- list()
+
+for (cond in conditions_in_data) {
+  for (samp in samples_to_find) {
+    
+    plot_key <- paste(cond, samp, sep = "_")
+    cell_indices <- which(seurat_object$Condition == cond & 
+                          grepl(samp, seurat_object$SampleName))
+    
+    n_cells <- length(cell_indices)
+    
+    if (n_cells > 0) {
+      sub_obj <- seurat_object[, cell_indices]
+      
+      p <- DimPlot(sub_obj, group.by = "seurat_annotated_astro", 
+                   cols = col_list[["UMAP_astro"]], pt.size = 0.1) + 
+        labs(x = NULL, y = NULL, title = NULL) + 
+        theme(
+          axis.title = element_blank(), 
+          plot.title = element_blank(),
+          legend.position = "none",
+          plot.margin = margin(2, 2, 2, 2)
+        ) & NoAxes()
+      
+      p <- p + annotate("text", x = Inf, y = -Inf, label = paste0("n = ", n_cells), 
+                        hjust = 1.5, vjust = 0, size = 2)
+    } else {
+      p <- ggplot() + theme_void() 
+    }
+    
+    # --- ADD LABELS ---
+    
+    if (cond == conditions_in_data[1]) {
+      p <- p + ggtitle(sample_labels[samp]) + 
+           theme(plot.title = element_text(hjust = 0.5, size = 6))
+    }
+    
+    if (samp == samples_to_find[1]) {
+      # Re-enable the Y-axis title JUST for this column
+      p <- p + ylab(condition_labels[cond]) + 
+           theme(axis.title.y = element_text(size = 6, angle = 90, vjust = 0.5, 
+                                            margin = margin(r = 0)))
+    }
+    
+    plot_list[[plot_key]] <- p
+  }
+}
+
+# Final Assembly
+plots[["combined_UMAP"]] <- wrap_plots(plot_list, ncol = 3) + 
+  plot_layout(guides = "collect") & 
+  guides(color = guide_legend(title = get_label("cell_types"),
+                              override.aes = list(size = 1),
+                              title.position = "left"
+                              ))&
+  theme(
+    text = element_text(size = 6),
+    legend.position = "bottom",
+    legend.justification.bottom = c(0.5, 0.5),
+    legend.text = element_text(size = 6, margin = margin(t = 0, r = 0, b = -1, l = 1)),
+    legend.key.spacing.y = unit(0, "mm"),
+    legend.key.spacing.x = unit(1, "mm"),
+    legend.margin = margin(t = 0, r = 0, b = 0, l = 0),
+    plot.margin = margin(0, 0, 2, 0),
+    legend.key.size = unit(2.5, "mm"),
+    legend.background = element_blank()
+  )
+
+plots[["combined_UMAP"]]
+
+ggsave(
+  filename = "results/02_astro_subset/2V_02_UMAP_all_conditions.tiff",
+  plot = plots[["combined_UMAP"]],
+  device = "tiff",
+  width = 8,   # 12 cm per plot
+  height = 10,  # adjust as needed
+  units = "cm",
+  dpi = 600,            
+  compression = "lzw",  
+  bg = "white" 
+)
+
+```
+
+```{r}
+
+cell_summary <- seurat_object@meta.data %>%
+  group_by(Isolation_pub, Condition) %>%
+  summarise(n_cells = n()) %>%
+  arrange(Isolation_pub, Condition)
+
+cell_summary
+```

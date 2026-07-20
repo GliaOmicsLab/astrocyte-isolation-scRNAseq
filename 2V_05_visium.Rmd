@@ -1,0 +1,292 @@
+---
+title: "2V_00_spatial"
+author: "Dominika Dostalova + Zuzana Matusova"
+date: "2025-05-09"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+### Overview
+This script generates chart for data prepared in 1DP_00_visium.Rmd and spatial transcriptomics dataset originally published by Zucha et al. (2024) (https://doi.org/10.1073/pnas.2404203121).
+
+```{r}
+suppressMessages(library("Matrix"))
+suppressMessages(library("NormExpression"))
+suppressMessages(library("DropletUtils"))
+suppressMessages(library("pheatmap"))
+suppressMessages(library("RColorBrewer"))
+suppressMessages(library("ggplot2"))
+suppressMessages(library("Seurat"))
+suppressMessages(library("sctransform"))
+suppressMessages(library("DT"))
+suppressMessages(library("scales"))
+suppressMessages(library("ggrepel"))
+suppressMessages(library("dplyr"))
+suppressMessages(library("SeuratWrappers"))
+suppressMessages(library("scmap"))
+suppressMessages(library("DoubletFinder"))
+suppressMessages(library("scCATCH"))
+suppressMessages(library("reshape2"))
+suppressMessages(library("ComplexHeatmap"))
+suppressMessages(library("here"))
+suppressMessages(library("gridExtra"))
+suppressMessages(library("clustree"))
+suppressMessages(library("magrittr"))
+suppressMessages(library("patchwork"))
+suppressMessages(library("purrr"))
+suppressMessages(library("ggpubr"))
+
+plots <- list()
+col_list <- list()
+orders <- list()
+source("code/0F_01_colours_orders.R", local = F, echo = F, print.eval = F)
+source("code/0F_02_general_functions.R", local = F, echo = F, print.eval = F)
+source("code/0F_03_label_names.R", local = F, echo = F, print.eval = F)
+```
+
+```{r}
+spatial_seurat <- readRDS("data/spatial_seurat_1DP_13_nygen.rds")#download dataset
+```
+
+#Spatial visualisation for Aldh1l1
+```{r}
+# Compute global min/max for Aldh1l1 across all spots
+aldh_values <- FetchData(spatial_seurat, vars = "Aldh1l1")
+global_min <- floor(min(aldh_values$Aldh1l1, na.rm = TRUE))
+global_max <- ceiling(max(aldh_values$Aldh1l1, na.rm = TRUE))
+
+plots <- list()
+image_names_list <- c("Ctrl", "7DPI")
+
+for (img in image_names_list) {
+  # 1. Generate the base plot using the actual slot name ("Ctrl" or "7DPI")
+  p <- make_transcript_plot(spatial_seurat, img, "Aldh1l1", rotation_degrees = 90)
+  
+  # 2. FIXED: If the slot is 7DPI, dynamically rename its title display to MCAO
+  if (img == "7DPI") {
+    p <- p + labs(title = "MCAO")
+  }
+  
+  plots[[img]] <- p
+}
+
+# Define a manual label with a coordinate system
+row_label <- ggplot() + 
+  annotate("text", x = 0, y = 0, 
+           label = "Aldh1l1", 
+           angle = 90, 
+           size = 2.1,          
+           fontface = "italic") + 
+  theme_void() +
+  coord_cartesian(xlim = c(-1, 1), ylim = c(-1, 1)) + 
+  theme(
+    plot.margin = margin(0, 0, 0, 0)
+  )
+
+# Combine the panels smoothly
+final_plot <- (row_label | wrap_plots(plots[image_names_list], ncol = 2)) + 
+  plot_layout(
+    widths = c(0.15, 1), 
+    guides = "collect"
+  ) +
+  plot_annotation(
+    title = get_label("pub_spatial")
+  ) & 
+  theme(
+    plot.title = element_text(
+      hjust = 0.5,              
+      size = 6,
+      margin = margin(b = 4)    
+    )
+  )
+
+final_plot
+
+# Save canvas
+ggsave(
+  filename = "results/05_visium/2V_05_spatial_Aldh1l1.tiff",
+  plot = final_plot,
+  device = "tiff",
+  width = 3.5, 
+  height = 2.5, 
+  units = "cm",
+  bg = "white",
+  dpi = 600,            
+  compression = "lzw"
+)
+```
+
+#Spatial visualisation for Gfap
+```{r}
+# Compute global min/max for Aldh1l1 across all spots
+aldh_values <- FetchData(spatial_seurat, vars = "Gfap")
+global_min <- floor(min(aldh_values$Gfap, na.rm = TRUE))
+global_max <- ceiling(max(aldh_values$Gfap, na.rm = TRUE))
+
+plots <- list()
+image_names_list <- c("Ctrl","7DPI")
+
+for (img in image_names_list) {
+  # Use 90 for 90 degrees clockwise
+  plots[[img]] <- make_transcript_plot(spatial_seurat, img, "Gfap", rotation_degrees = 90)
+}
+
+# Define a manual label with a coordinate system
+row_label <- ggplot() + 
+  # annotate places the text at a specific (x, y) point
+  # Adjust 'y' to move it up or down (0 is center, positive is up, negative is down)
+  annotate("text", x = 0, y = 0, 
+           label = "Gfap", 
+           angle = 90, 
+           size = 2.1,          # size 2.1 in annotate is approx size 6 in element_text
+           fontface = "italic") + 
+  theme_void() +
+  # This creates a 'box' from -1 to 1. 
+  # You can now move the label precisely by changing y in annotate above.
+  coord_cartesian(xlim = c(-1, 1), ylim = c(-1, 1)) + 
+  theme(
+    plot.margin = margin(0, 0, 0, 0)
+  )
+
+# The rest of your combination code stays the same
+final_plot <- (row_label | wrap_plots(plots[image_names_list], ncol = 2)) + 
+  plot_layout(
+    widths = c(0.15, 1), 
+    guides = "collect"
+  ) +
+  # --- THE FIX: Add a shared global title ---
+  plot_annotation(
+    title = get_label("pub_spatial")
+  ) & 
+  # Using the & operator applies theme styling across the entire patchwork canvas
+  theme(
+    plot.title = element_text(
+      hjust = 0.5,              # Center it across the whole image
+      size = 6,
+      margin = margin(b = 4)    # Add a tiny gap between title and plots
+    )
+  )
+
+final_plot
+
+ggsave(
+  filename = "results/05_visium/2V_00_spatial_Gfap.tiff",
+  plot = final_plot,
+  device = "tiff",
+  width = 3.5, 
+  height = 2.5, 
+  units = "cm",
+  bg = "white",
+  dpi = 600,            
+  compression = "lzw"
+)
+```
+
+
+```{r}
+cell_summary <- readRDS("ws/05_visium/1DP_05_Gfap_summary_visium.rds")
+cell_summary$Percent_Integer <- round(cell_summary$Percent_Gene_Positive)
+```
+#Bar plot for Aldh1l1+ and Gfap-high+ spots
+```{r}
+# Define pairwise comparisons
+comparisons <- list(
+  #c("Ctrl", "1DPI"),
+  #c("Ctrl", "3DPI"),
+  c("Ctrl", "7DPI")
+)
+
+# Run Fisher test for each comparison
+pval_df <- do.call(rbind, lapply(comparisons, function(pair) {
+  group1 <- pair[1]
+  group2 <- pair[2]
+
+  data1 <- cell_summary[cell_summary$sample == group1, ]
+  data2 <- cell_summary[cell_summary$sample == group2, ]
+
+  contingency_table <- matrix(c(
+    data1$High_Expressing_Cells, data1$Total_Cells - data1$High_Expressing_Cells,
+    data2$High_Expressing_Cells, data2$Total_Cells - data2$High_Expressing_Cells
+  ), nrow = 2, byrow = TRUE)
+
+  p <- fisher.test(contingency_table)$p.value
+
+  data.frame(group1 = group1, group2 = group2, p.value = p)
+}))
+
+# Adjust p-values
+pval_df$p.adj <- p.adjust(pval_df$p.value, method = "BH")
+
+# Add significance stars
+pval_df$p.adj.signif <- sapply(pval_df$p.adj, function(p) {
+  if (p < 0.001) return("***")
+  else if (p < 0.01) return("**")
+  else if (p < 0.05) return("*")
+  else return("ns")
+})
+
+# Add y positions for each bracket
+pval_df$y.position <- c(420)
+
+# --- FIXED FOR BRACKET MATCHING ---
+# If your x-axis labels are renamed to MCAO, the significance bracket 
+# needs to target "MCAO" instead of "7DPI" to align perfectly.
+pval_df$group2[pval_df$group2 == "7DPI"] <- "MCAO"
+
+
+# ==========================================
+# STEP 2: PLOT GENERATION
+# ==========================================
+cell_summary_filtered <- cell_summary[cell_summary$sample %in% c("Ctrl", "7DPI"), ]
+
+plots[["bar_splot_spatial"]] <- ggplot(cell_summary_filtered, aes(x = sample, y = Total_Cells)) +
+  geom_bar(aes(fill = "Aldh1l1+"), stat = "identity", color = col_list[["borders"]], linewidth = 0.3) +
+  geom_bar(aes(y = High_Expressing_Cells, fill = "Gfap-high+"),
+           stat = "identity", color = col_list[["borders"]], linewidth = 0.3) +
+  geom_text(aes(y = High_Expressing_Cells + 10, label = paste0(Percent_Integer, "%")),
+            size = 2, vjust = 0) +
+
+  # Significance brackets from Fisher test (Uncomment when ready)
+  # stat_pvalue_manual(
+  #   pval_df,
+  #   label = "p.adj.signif",
+  #   tip.length = 0.01,
+  #   size = 1.5
+  # ) +
+
+  theme_mk_title +
+  labs(title = get_label("pub_spatial"), y = "Number of spots", fill = "Spots") +
+  remove_grid +
+  
+  # --- FIXED: Remap 7DPI column label to MCAO on the axis display ---
+  scale_x_discrete(labels = c("Ctrl" = "Ctrl", "7DPI" = "MCAO")) +
+  
+  theme(
+    axis.text.x = element_text(angle = 310, vjust = 0.1, hjust = 0.2),
+    axis.title.x = element_blank(),
+    legend.position = "right",
+  ) +
+  scale_fill_manual(
+    values = col_list[["bar_plot_visium"]],
+    labels = c(
+      "Aldh1l1+" = get_label("Aldh1l1+"), 
+      "Gfap-high+" = get_label("Gfap_high+")
+    )                  
+  ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 520))
+
+plots[["bar_splot_spatial"]]
+
+#save
+ggsave(
+  filename = "results/05_visium/2V_05_spatial_barplot.tiff",
+  plot = plots[["bar_splot_spatial"]],
+  device = "tiff",
+  width = 4, 
+  height = 4, 
+  units = "cm",
+  dpi = 600,            
+  compression = "lzw", 
+  bg = "white"
+)
+```

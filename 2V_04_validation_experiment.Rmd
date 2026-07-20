@@ -1,0 +1,82 @@
+---
+title: "2V_04_validation_experiment"
+author: "Dominika Dostalova"
+date: "2026-06-18"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+#Visualisation
+This script handles the data visualization for the outputs generated in the `1DP_04_validation_experiment` R Markdown file.
+
+
+```{r}
+suppressMessages(library("tidyverse"))
+suppressMessages(library("magrittr"))
+suppressMessages(library("dplyr"))
+suppressMessages(library("stringr"))
+suppressMessages(library("purrr"))
+
+plots <- list()
+col_list <- list()
+orders <- list()
+source("code/0F_01_colours_orders.R", local = F, echo = F, print.eval = F)
+source("code/0F_02_general_functions.R", local = F, echo = F, print.eval = F)
+source("code/0F_03_label_names.R", local = F, echo = F, print.eval = F)
+gene_symbol <- read.table("data/all_genes.csv", header = TRUE, sep = ",")
+```
+
+```{r}
+comparison_df <- readRDS("ws/04_validation_experiment/1DP_04_processed_all_replicates.rds")
+```
+
+
+```{r}
+my_comparisons <- list( c("Miltenyi", "WorthGentle") )
+                       
+plots[["val_plot"]] <- ggplot(comparison_df, aes(x = Condition, y = Gfap_pct, fill = Condition, shape = Experiment)) +
+  geom_jitter(
+    position = position_jitter(width = 0.2, seed = 123),
+    size = 2, 
+    alpha = 1, 
+    color = col_list[["borders"]],       
+    stroke = 0.2           # Thickness of the border
+  )+
+  # Select fillable shapes (21 = circle, 24 = triangle)
+  scale_shape_manual(values = c("1st" = 21, "2nd" = 24)) +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    method = "t.test",
+    label = "p.signif",           # Forces asterisks (*, **, ***)
+    hide.ns = FALSE,              # Set to TRUE if you want to hide 'ns'
+    size = 2.2,                     # Size of the stars
+    vjust = 0.5                   # Vertical adjustment on the bracket
+  ) +
+  scale_fill_manual(values = col_list[["isol_prot"]])+
+  scale_y_continuous(limits = c(0, 70))+
+  labs(
+       title = get_label("qPCR"),
+       y =get_label("Gfap_per"), 
+       x=NULL,
+       shape = get_label("replicate")) +
+  guides(fill = "none") +
+    theme_mk_title+
+  remove_grid+
+  theme(axis.text.x = element_text(angle = 310, vjust = 0.1, hjust = 0.2))
+plots[["val_plot"]]
+
+#Save the plot
+ggsave(
+  filename = "results/04_validation_experiment/2V_03_jitter_plot.tiff",              
+  plot = plots[["val_plot"]],          
+  device = "tiff",                          
+  width = 4.5,                             
+  height = 4.5,                              
+  units = "cm", 
+  dpi = 600,            
+  compression = "lzw",  
+  bg = "white" 
+)
+
+```

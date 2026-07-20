@@ -1,0 +1,117 @@
+---
+title: "2V_06_technical_parameters"
+author: "Dominika Dostalova"
+date: "2026-05-12"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# Introduction
+This script handles the data visualization for the outputs generated in the `1DP_02_astro_subset` R Markdown file.
+
+```{r}
+suppressMessages(library("Matrix"))
+suppressMessages(library("DropletUtils"))
+suppressMessages(library("ggplot2"))
+suppressMessages(library("Seurat"))
+suppressMessages(library("SeuratObject"))
+suppressMessages(library("clustree"))
+suppressMessages(library("DoubletFinder"))
+suppressMessages(library("scProportionTest"))
+suppressMessages(library("gridExtra"))
+suppressMessages(library("dittoSeq"))
+suppressMessages(library("dplyr"))
+suppressMessages(library("SoupX"))
+suppressMessages(library("ComplexHeatmap"))
+suppressMessages(library("ggridges"))
+suppressMessages(library("SeuratWrappers"))
+suppressMessages(library("openxlsx"))
+suppressMessages(library("EnhancedVolcano"))
+suppressMessages(library("ggrepel"))
+suppressMessages(library("clusterProfiler"))
+suppressMessages(library("enrichplot"))
+suppressMessages(library("AnnotationDbi"))
+suppressMessages(library("org.Mm.eg.db"))
+suppressMessages(library("glmGamPoi"))
+suppressMessages(library("future"))
+suppressMessages(library("patchwork"))
+
+plots <- list()
+col_list <- list()
+orders <- list()
+source("code/0F_01_colours_orders.R", local = F, echo = F, print.eval = F)
+source("code/0F_02_general_functions.R", local = F, echo = F, print.eval = F)
+source("code/0F_03_label_names.R", local = F, echo = F, print.eval = F)
+gene_symbol <- read.table("data/all_genes.csv", header = TRUE, sep = ",")
+```
+
+
+Create folders for saving objects
+```{r Folders, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+# Define folders
+folders <- c("results", "results/06_technical_parameters")
+
+# Create folders if they don't exist
+lapply(folders, function(f) if (!dir.exists(f)) dir.create(f, recursive = TRUE))
+```
+
+
+#Violin plots for astro cells 
+```{r}
+#seurat_object <- readRDS("ws/02_astro_subset/1DP_02_seurat_annotated_astro.rds")
+
+meta_data <- seurat_object@meta.data
+
+# Generate plots without condition faceting
+p1 <- violin_boxplot(meta_data, "nFeature_RNA", get_label("nFeature_RNA")) + 
+  scale_y_log10(labels = add_sci_superscript) +
+  violin_theme +
+  theme(axis.text.x = element_blank())
+
+p2 <- violin_boxplot(meta_data, "nCount_RNA", get_label("nCount_RNA")) + 
+  scale_y_log10(labels = add_sci_superscript) +
+  violin_theme +
+  theme(axis.text.x = element_blank())
+
+p3 <- violin_boxplot(meta_data, "percent.mt", get_label("percent.mt")) + 
+  violin_theme +
+  theme(axis.text.x = element_blank())
+
+p4 <- violin_boxplot(meta_data, "percent.rib", get_label("percent.rib")) + 
+  violin_theme
+
+# Combine vertically using patchwork
+library(patchwork)
+plots[["violin"]] <- p1 / p2 / p3 / p4
+plots[["violin"]]
+
+ggsave(
+  filename = "results/06_technical_parameters/2V_06_violinplot_astro_isol_astro.tiff",             
+  plot = plots[["violin"]],         
+  device = "tiff",                          
+  width = 5,                              
+  height = 11,                              
+  units = "cm",
+  dpi = 600,            
+  compression = "lzw",  
+  bg = "white" 
+)
+```
+
+```{r}
+
+# Calculate medians grouped by Isolation protocol and Condition
+median_by_isolation <- meta_data %>%
+  group_by(Isolation_pub) %>%
+  summarise(
+    Median_nFeature    = median(nFeature_RNA, na.rm = TRUE),
+    Median_nCount      = median(nCount_RNA, na.rm = TRUE),
+    Median_percent_mt  = median(percent.mt, na.rm = TRUE),
+    Median_percent_rib = median(percent.rib, na.rm = TRUE),
+    Cell_Count         = n(), # Optional: shows how many cells are in this group
+    .groups = "drop"
+  )
+
+# View the results
+print(median_by_isolation)
+```

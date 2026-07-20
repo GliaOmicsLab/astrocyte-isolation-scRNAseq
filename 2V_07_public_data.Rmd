@@ -1,0 +1,122 @@
+---
+title: "2V_07_public_data"
+author: "Dominika Dostalova"
+date: "2025-07-29"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+#Visualisation
+This script visualizes a comparison of astrocyte yield data across different public studies.
+
+```{r}
+suppressMessages(library("Matrix"))
+suppressMessages(library("NormExpression"))
+suppressMessages(library("DropletUtils"))
+suppressMessages(library("pheatmap"))
+suppressMessages(library("RColorBrewer"))
+suppressMessages(library("ggplot2"))
+suppressMessages(library("Seurat"))
+suppressMessages(library("sctransform"))
+suppressMessages(library("DT"))
+suppressMessages(library("scales"))
+suppressMessages(library("ggrepel"))
+suppressMessages(library("dplyr"))
+suppressMessages(library("SeuratWrappers"))
+suppressMessages(library("scmap"))
+suppressMessages(library("DoubletFinder"))
+suppressMessages(library("scCATCH"))
+suppressMessages(library("reshape2"))
+#suppressMessages(library("CellChat"))
+suppressMessages(library("ComplexHeatmap"))
+suppressMessages(library("here"))
+suppressMessages(library("gridExtra"))
+suppressMessages(library("clustree"))
+suppressMessages(library("magrittr"))
+suppressMessages(library("patchwork"))
+suppressMessages(library("purrr"))
+plots <- list()
+col_list <- list()
+orders <- list()
+source("code/0F_01_colours_orders.R", local = F, echo = F, print.eval = F)
+source("code/0F_02_general_functions.R", local = F, echo = F, print.eval = F)
+source("code/0F_03_label_names.R", local = F, echo = F, print.eval = F)
+genenames <- read.table("data/all_genes.csv", header = TRUE, sep = ",")
+```
+
+
+Create folders for saving objects
+```{r Folders, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+# Define folders
+folders <- c("results", "results/07_public_data")
+
+# Create folders if they don't exist
+lapply(folders, function(f) if (!dir.exists(f)) dir.create(f, recursive = TRUE))
+```
+
+```{r}
+plots <- list()
+pub_data <- read.csv("data/astrocyte_yield_public_data.csv", stringsAsFactors = FALSE)
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(stringr)
+
+# Clean yield values (convert ranges to midpoints or keep as is)
+astro_data_clean <-pub_data %>%
+  mutate(
+    Astro_yield_text = Astro_Gfap,  # Save original for labeling
+    Astro_yield_num = str_replace_all(Astrocyte.yield, "[^0-9\\-\\.]", ""),
+    Astro_yield_num = ifelse(
+      str_detect(Astro_yield_num, "-"),
+      rowMeans(do.call(rbind, str_split(Astro_yield_num, "-")) %>% apply(2, as.numeric), na.rm = TRUE),
+      as.numeric(Astro_yield_num)
+    )
+  )
+
+astro_data_clean$GFAP.astrocytes_clean <- ifelse(
+  astro_data_clean$GFAP.astrocytes == "NI", 
+  "?", 
+  astro_data_clean$GFAP.astrocytes
+)
+
+```
+
+```{r}
+plots[["column_pub"]] <- ggplot(astro_data_clean, aes(x = reorder(Citation, Astro_yield_num), y = Astro_yield_num)) +
+  
+  # --- CHANGED: Added width = 0.6 to increase the spacing between columns ---
+  geom_col(
+    fill = col_list[["column_plot"]], 
+    color = col_list[["borders"]], 
+    linewidth = 0.3,                 # Switched 'size' to 'linewidth' to match updated ggplot syntax
+    width = 0.7                      # Lower number = wider space between bars (Try 0.5 for even bigger space)
+  ) +
+  
+  geom_text(aes(label = Astro_yield_text), vjust = +0.3, size = 1.5, hjust = -0.1) +
+  coord_flip() +
+  labs(
+    x = "Studies",
+    y = expression("Astrocyte yield (% " * italic("Gfap") * "+)")
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)), limits = c(0, 25)) +
+  theme_mk +
+  NoGrid()
+
+plots[["column_pub"]]
+
+
+ggsave(
+  filename = "results/07_public_data/2V_07_column_pub.tiff",              
+  plot = plots[["column_pub"]],          
+  device = "tiff",                          
+  width = 6,                             
+  height = 8,                              
+  units = "cm", 
+  dpi = 600,            # Sets the high resolution
+  compression = "lzw",  # Compresses the file without losing quality
+  bg = "white"          # Ensures a solid white background
+)
+```

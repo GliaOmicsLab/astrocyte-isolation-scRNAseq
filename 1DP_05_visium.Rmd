@@ -1,0 +1,108 @@
+---
+title: "1DP_00_visium"
+author: "Dominika Dostalova + Zuzana Matusova"
+date: "2025-08-13"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+### Overview
+This script generates the data summaries required to visualize the proportion of *Gfap*-High reactive astrocytic spots via barplots, corresponding to the downstream analysis in `2V_00_visium.Rmd`.
+
+### Data Provenance & Reproducibility
+1. **Source Study:** This analysis utilizes a publicly available spatial transcriptomics dataset originally published by Zucha et al. (2024) (https://doi.org/10.1073/pnas.2404203121).
+2. **Anatomical Focus:** Restricting analysis to the **Cortex** and **Stroke Lesion core** to directly match our single-cell RNA-seq datasets.
+3. **Identification of *Gfap*-High Astrocytic Spots:** Spots positive for *Aldh1l1* expression ($Aldh1l1 > 0$) are dynamically binned into a "High-Expressing" reactive class if their *Gfap* expression exceeds the mean of the baseline control spots.
+
+
+Create folders for saving objects
+```{r Folders, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+# Define folders
+folders <- c("ws", "ws/05_visium", "results", "results/05_visium")
+
+# Create folders if they don't exist
+lapply(folders, function(f) if (!dir.exists(f)) dir.create(f, recursive = TRUE))
+```
+
+```{r Load libraries and scripts, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+suppressMessages(library("Matrix"))
+suppressMessages(library("DropletUtils"))
+suppressMessages(library("ggplot2"))
+suppressMessages(library("Seurat"))
+suppressMessages(library("SeuratObject"))
+suppressMessages(library("clustree"))
+suppressMessages(library("DoubletFinder"))
+suppressMessages(library("scProportionTest"))
+suppressMessages(library("gridExtra"))
+suppressMessages(library("dittoSeq"))
+suppressMessages(library("dplyr"))
+suppressMessages(library("SoupX"))
+suppressMessages(library("ComplexHeatmap"))
+suppressMessages(library("ggridges"))
+suppressMessages(library("SeuratWrappers"))
+suppressMessages(library("openxlsx"))
+suppressMessages(library("EnhancedVolcano"))
+suppressMessages(library("ggrepel"))
+suppressMessages(library("clusterProfiler"))
+suppressMessages(library("enrichplot"))
+suppressMessages(library("AnnotationDbi"))
+suppressMessages(library("org.Mm.eg.db"))
+
+plots <- list()
+col_list <- list()
+orders <- list()
+source("code/0F_01_colours_orders.R", local = F, echo = F, print.eval = F)
+source("code/0F_02_general_functions.R", local = F, echo = F, print.eval = F)
+gene_symbol <- read.table("data/all_genes.csv", header = TRUE, sep = ",")
+```
+
+Load Visium data
+```{r seurat_object, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}}
+seurat_object <- readRDS("data/spatial_seurat_1DP_13_nygen.rds")
+```
+
+Identification of Alhdhl1l and Gfap+ spots 
+```{r visium_Gfap, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+
+# Visium Spatial Gfap+ cells
+seurat_object <- subset(seurat_object, subset = BrainAreas %in% c("Cortex","Lesion"))
+
+# Extract metadata
+meta <- seurat_object@meta.data
+
+# Define gene
+gene_name <- c("Gfap","Aldh1l1")
+
+# Extract normalized expression
+expr_data <- FetchData(seurat_object, vars = gene_name, layer = "data")  # This includes all cells
+expr_data$sample <- seurat_object$Condition # Ensure metadata column matches
+expr_data <- expr_data %>% filter(.[[gene_name[2]]] > 0) # all Aldh1l1+ cells
+
+# Classify cells as Gfap-positive if expression > 0
+expr_data$Gene_Positive <- expr_data[[gene_name[1]]] > 0 #Gfap+ cells from all Aldh1l1+ cells
+
+#Gfap+ cells from all Aldh1l1+ cells with regulation for higher expression of Gfap+ cells than in controls
+mean_expression <- expr_data %>%
+  group_by(sample) %>%
+  summarise(mean_expr = mean(.data[[gene_name[1]]][.data[[gene_name[1]]] > 0], na.rm = TRUE))
+
+# Classify cells as "high-expressing" (above control threshold)
+expr_data$Gene_Positive <- expr_data[[gene_name[1]]] > as.numeric(mean_expression[mean_expression$sample == "Ctrl","mean_expr"])
+
+
+cell_summary <- expr_data %>%
+  group_by(sample) %>%
+  summarise(
+    Total_Cells = n(),  # Total number of cells
+    High_Expressing_Cells = sum(Gene_Positive)
+  )
+
+cell_summary <- cell_summary %>%
+  mutate(Percent_Gene_Positive = round((High_Expressing_Cells / Total_Cells) * 100, 1))
+cell_summary$sample <- factor(cell_summary$sample, levels = c("Ctrl", "1DPI", "3DPI", "7DPI"))
+
+View(cell_summary)
+
+saveRDS(cell_summary, "ws/05_visium/1DP_05_Gfap_summary_visium.rds")
+```

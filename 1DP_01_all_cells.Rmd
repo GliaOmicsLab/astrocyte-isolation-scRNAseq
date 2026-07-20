@@ -1,0 +1,430 @@
+---
+title: "1DP_01_all_cells"
+author: "Dominika Dostalova + Zuzana Matusova"
+date: "2025-07-24"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# Introduction
+This notebook executes the downstream processing pipeline for a single-cell transcriptomic study comparing various brain tissue isolation protocols.
+
+
+Create folders for saving objects
+```{r Folders, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+# Define folders
+folders <- c("ws", "ws/01_all_cells", "results", "results/01_all_cells", "results/supplements")
+
+# Create folders if they don't exist
+lapply(folders, function(f) if (!dir.exists(f)) dir.create(f, recursive = TRUE))
+```
+
+Initialize packages with defined versions 
+```{r Packages separation for projects, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+renv::restore(lockfile = "renv.lock", clean = TRUE)#Initializing without overwriting the copied file
+1
+```
+
+```{r Packages separation for projects, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+renv::restore(lockfile = "renv.lock", clean = TRUE)#Restore the library state; this will install the exact versions of packages as recorded in the renv.lock file
+y
+```
+
+Load packages and print sessionInfo to see package versions.
+```{r packages, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+suppressMessages(library("DropletUtils"))
+suppressMessages(library("ggplot2"))
+suppressMessages(library("Seurat"))
+suppressMessages(library("SeuratObject"))
+suppressMessages(library("clustree"))
+suppressMessages(library("DoubletFinder"))
+suppressMessages(library("scProportionTest"))
+suppressMessages(library("gridExtra"))
+suppressMessages(library("dittoSeq"))
+suppressMessages(library("dplyr"))
+suppressMessages(library("SoupX"))
+suppressMessages(library("ComplexHeatmap"))
+suppressMessages(library("ggridges"))
+suppressMessages(library("SeuratWrappers"))
+suppressMessages(library("openxlsx"))
+suppressMessages(library("EnhancedVolcano"))
+suppressMessages(library("ggrepel"))
+suppressMessages(library("clusterProfiler"))
+suppressMessages(library("enrichplot"))
+suppressMessages(library("AnnotationDbi"))
+suppressMessages(library("org.Mm.eg.db"))
+suppressMessages(library("future"))
+suppressMessages(library("glmGamPoi"))
+
+sessionInfo()
+gene_symbol <- read.table("data/all_genes.csv", header = TRUE, sep = ",")
+
+plots <- list() #for storing plots
+col_list <- list() # for the colors used in the charts
+orders <- list() # for variable names in the required order
+source("code/0F_01_colours_orders.R", local = F, echo = F, print.eval = F)
+source("code/0F_02_general_functions.R", local = F, echo = F, print.eval = F)
+source("code/0F_03_label_names.R", local = F, echo = F, print.eval = F)
+```
+
+
+# Quality control metrics
+Several quality control metrics can be used to assess quality of the data and prompt additional filtering. The code below is specific to human samples - for mouse (or other organism) data analysis use the respective gene nomenclature standards.
+nFeature and nCount metrics are included automatically to the Seurat object.
+
+Calculate the percentage of mitochondrial genes and ribosomal protein genes in each of the Seurat objects in the "seurat" list. It creates a new column in each Seurat object called "percent.mt" and "percent.rib" that contains the percentage of mitochondrial and ribosomal protein genes, respectively. If fixed 10X protocol has been used, percent.rib is not required as the probes do not include those targeting ribosomal genes.
+
+```{r seurat_object, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+seurat_object <- readRDS("data/seurat_Isolation_only.rds") #Seurat object generated via 1DP_00_raw_data_to_seurat.Rmd
+```
+
+Remove genes that have zero counts across all cells
+```{r nonzero_counts, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+counts_matrix <- GetAssayData(seurat_object, assay = "RNA", slot = "counts")
+seurat_object <- subset(seurat_object, features = rownames(counts_matrix[rowSums(counts_matrix) > 0, ]))
+rm(counts_matrix)
+```
+
+Basic metrics for filtering
+```{r percent.mt, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+VlnPlot(seurat_object, "nFeature_RNA", group.by = "SampleName", pt.size = 0) | VlnPlot(seurat_object, "nCount_RNA", group.by = "SampleName", pt.size = 0) | VlnPlot(seurat_object, "percent.mt", group.by = "SampleName", pt.size = 0) 
+
+seurat_object <- subset(seurat_object, (percent.mt < 20) & (nFeature_RNA > 500))
+```
+
+# Clustering
+
+Normalization and scaling of the RNA assay.
+```{r normalize}
+DefaultAssay(seurat_object) <- "RNA"
+all.genes.RNA <- rownames(seurat_object)
+seurat_object <- NormalizeData(seurat_object, normalization.method = "LogNormalize", scale.factor = 10000)
+seurat_object <- ScaleData(seurat_object, features = all.genes.RNA)
+
+set.seed(1234)
+options(future.globals.maxSize = 8 * 1024^3)
+seurat_object <- SCTransform(seurat_object, verbose = TRUE, return.only.var.genes = TRUE, 
+                             assay = "RNA", n_genes = NULL, variable.features.n = NULL, method = "glmGamPoi") 
+```
+
+First, decide which assay will be used for PCA, UMAP, and clustering - integrated or SCT. In PCA, number of genes used can be reduced from all to e. g. only variable. Based on Elbow Plot decide, how many dimensions will be used in further analysis - how many is reasonable for explaining the most of the variability. Run UMAP on selected number of dimensions.
+
+```{r PCA, UMAP, preparation for clustering}
+DefaultAssay(seurat_object) <- "SCT" 
+
+all.genes <- row.names(seurat_object)
+set.seed(1234)
+seurat_object <- RunPCA(seurat_object, npcs = 50, verbose = FALSE, features = all.genes)
+print(ElbowPlot(seurat_object, ndims = 50, reduction = "pca"))
+
+ndim <- 20
+
+set.seed(1234)
+seurat_object <- RunUMAP(seurat_object, reduction = "pca", dims = 1:ndim, verbose = TRUE)
+
+set.seed(1234)
+seurat_object <- FindNeighbors(seurat_object, reduction = "pca", dims = 1:ndim, verbose = TRUE)
+
+rm(all.genes)
+```
+
+Proceed with clustering. Choose optimal resolution, {clustree} package can help decide, as it plots multiple resolutions and connections between the identified clusters. Based on this plot the most reasonable resolution can be selected (the one where relationships between clusters are clear and not intermixed).
+
+```{r clustree}
+# Clustree - selection of optimal clustering resolution
+
+seurat_clustree <- seurat_object
+assay <- seurat_object@active.assay
+for (i in 0:10) {
+  resol = i/10
+  seurat_clustree <- FindClusters(seurat_clustree, resolution = resol, graph.name = paste0(assay,"_snn"))
+}
+
+print(clustree(seurat_clustree, prefix = paste0(assay,"_snn_res.")))
+```
+
+
+```{r clustering}
+# set the optimal resolution based on clustree, prior knowledge, or randomly
+res <- 0.2 
+
+set.seed(1234)
+seurat_object <- FindClusters(seurat_object, resolution = res, verbose = TRUE)
+
+# check DimPlot using the optimal resolution
+DimPlot(seurat_object)
+```
+
+```{r save}
+saveRDS(seurat_object,"ws/01_all_cells/01_seurat_UMAP_all_cells.rds")
+```
+
+# DoubletFinder
+
+DoubletFinder is used to identify potential doublets. Eventually, Seurat object metadata gain new column specifying Singlet/Low/High confidence doublet status of each cell. This can be visualized in the UMAP and High-confidence doublets can be filtered out.
+```{r}
+seurat_object <- readRDS("ws/01_all_cells/01_seurat_UMAP_all_cells.rds")
+```
+
+
+```{r doublet_finder}
+set.seed(1234)
+pdf_DF <- "results/01_all_cells/01_DF_pK_values.pdf"
+source("code/0F_04_doublet_finder_fc_Zuz.R", local = knitr::knit_global())
+source("code/0F_05_doublet_finder.R", local = knitr::knit_global())
+saveRDS(seurat_object,"ws/01_all_cells/01_seurat_doubletFinder_ACSA2_all_cells.rds")
+```
+
+# QC and clustering plots
+
+Print QC plots, save in PDF in *plots* folder.
+```{r QCplots1}
+seurat_object@active.ident <- as.factor(seurat_object$sample)
+pdf("results/01_all_cells/01_QCplots_ACSA2.pdf", width = 14, height = 7)
+  print(gridExtra::grid.arrange(
+    VlnPlot(seurat_object, features = c("nFeature_RNA"), pt.size = 0) + NoLegend() + 
+      theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+      geom_hline(yintercept = 500),
+    VlnPlot(seurat_object, features = c("nCount_RNA"), pt.size = 0) + NoLegend() + 
+      theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+      geom_hline(yintercept = 500),
+    VlnPlot(seurat_object, features = c("percent.mt"), pt.size = 0) + NoLegend() + 
+      theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+      geom_hline(yintercept = 10),
+    VlnPlot(seurat_object, features = c("percent.Largest.gene"), pt.size = 0) + 
+      scale_y_log10() + NoLegend() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)),
+    ncol = 4))
+  
+  p2 <- gridExtra::grid.arrange(VlnPlot(seurat_object, "nFeature_RNA", pt.size = 0) + NoLegend() + geom_hline(yintercept = 500) +
+                            theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1)),
+                          VlnPlot(seurat_object, "nCount_RNA", pt.size = 0) + NoLegend() + geom_hline(yintercept = 500) +
+                            theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1)),
+                          FeaturePlot(seurat_object, c("nFeature_RNA"), max.cutoff = 5000, cols = c("blue","#e7e7e7")),
+                          FeaturePlot(seurat_object, "nCount_RNA", max.cutoff = 5000, cols = c("blue","#e7e7e7")),
+                          layout_matrix = rbind(c(1,1,3,4),c(2,2,3,4))
+                          )
+  
+  # Doublets
+  gridExtra::grid.arrange(top = "Doublets",
+                          DimPlot(seurat_object, reduction = "umap", label = TRUE) + NoLegend(),
+                          DimPlot(seurat_object, reduction = "umap", label = FALSE, 
+                                  group.by = "Doublet") + NoLegend() + theme(plot.title = element_blank()),
+                          ggplot(data=seurat_object@meta.data, aes(seurat_clusters)) +
+                            geom_bar(aes(fill=Doublet), position="fill") +
+                            ylab('Proportion of cells'),
+                          ggplot(data=seurat_object@meta.data, aes(sample)) +
+                            geom_bar(aes(fill=Doublet), position="fill") +
+                            ylab('Proportion of cells') + 
+                            theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1)),
+                          layout_matrix = rbind(c(1,3,3), c(2,4,4))
+  )
+  
+  DimPlot(seurat_object, split.by = "sample", group.by = "seurat_clusters", ncol = 4, pt.size = 0.5)
+dev.off()
+```
+
+# Filtering
+
+If required, filtering can be applied to the data based on QC and/or annotation conclusions. Usually, odd clusters of low quality cells, doublets, ambiguous features, stressed, can be filtered out. Analysis needs to be repeated - normalized, scaled (and SCTransformed if SCT is to be used instead of integrated assay).
+
+```{r filtering}
+seurat_object <- subset(seurat_object, (Doublet != "Doublet - High Confidence"))
+```
+
+# Clustering
+
+Normalization and scaling of the RNA assay.
+```{r normalize}
+DefaultAssay(seurat_object) <- "RNA"
+all.genes.RNA <- rownames(seurat_object)
+seurat_object <- NormalizeData(seurat_object, normalization.method = "LogNormalize", scale.factor = 10000)
+seurat_object <- ScaleData(seurat_object, features = all.genes.RNA)
+
+
+options(future.globals.maxSize = 8 * 1024^3)
+set.seed(1234)
+seurat_object <- SCTransform(seurat_object, verbose = TRUE, return.only.var.genes = TRUE, 
+                             assay = "RNA", n_genes = NULL, variable.features.n = NULL, method = "glmGamPoi")
+```
+
+First, decide which assay will be used for PCA, UMAP, and clustering - integrated or SCT. In PCA, number of genes used can be reduced from all to e. g. only variable. Based on Elbow Plot decide, how many dimensions will be used in further analysis - how many is reasonable for explaining the most of the variability. Run UMAP on selected number of dimensions.
+
+```{r PCA}
+DefaultAssay(seurat_object) <- "SCT" # can be set to SCT or integrated
+
+# PCA, UMAP, preparation for clustering
+
+all.genes <- row.names(seurat_object)
+
+set.seed(1234)
+seurat_object <- RunPCA(seurat_object, npcs = 50, verbose = FALSE, features = all.genes)
+print(ElbowPlot(seurat_object, ndims = 50, reduction = "pca"))
+
+ndim <- 20 
+
+set.seed(1234)
+seurat_object <- RunUMAP(seurat_object, reduction = "pca", dims = 1:ndim, verbose = TRUE)
+seurat_object <- FindNeighbors(seurat_object, reduction = "pca", dims = 1:ndim, verbose = TRUE)
+
+rm(all.genes)
+```
+
+Proceed with clustering. Choose optimal resolution, here set to 0.5. {clustree} package can help decide, as it plots multiple resolutions and connections between the identified clusters. Based on this plot the most reasonable resolution can be selected (the one where relationships between clusters are clear and not intermixed).
+
+```{r clustree}
+# Clustree, to help with selection of optimal clustering resolution.
+
+seurat_clustree <- seurat_object
+assay <- seurat_object@active.assay
+
+# --- Define your exact custom resolutions here ---
+custom_resolutions <- c(0.05, 0.075, 0.1)
+
+for (resol in custom_resolutions) {
+  message("Calculating clusters for resolution: ", resol)
+  seurat_clustree <- FindClusters(
+    seurat_clustree, 
+    resolution = resol, 
+    graph.name = paste0(assay, "_snn"), 
+    verbose = FALSE
+  )
+}
+
+# Print the tree graph using your custom steps
+print(clustree(seurat_clustree, prefix = paste0(assay, "_snn_res.")))
+```
+
+```{r clustering}
+# set the optimal resolution based on clustree, prior knowledge, or randomly
+res <- 0.075 
+
+set.seed(1234)
+seurat_object <- FindClusters(seurat_object, resolution = res, verbose = TRUE)
+
+# check DimPlot using the optimal resolution
+DimPlot(seurat_object)
+```
+
+```{r  save}
+saveRDS(seurat_object, "ws/01_all_cells/01_seurat_filtered_ACSA2_all_cells.rds")
+```
+
+# Population analysis & annotation
+
+Clusters can be annotated based on expression of their marker genes. This information is usually combined with cluster-specific expression of known canonical markers of the expected cell populations.
+
+First, marker genes specific for the current dataset are calculated. Parameters can be adjusted to be more stringent or conversely, more loose, depending on individual requirements.
+
+```{r markers}
+DefaultAssay(seurat_object) <- "RNA"
+Idents(seurat_object) <- "seurat_clusters"
+markers <- FindAllMarkers(seurat_object, min.pct = 0.8, logfc.threshold = 0.65, only.pos = TRUE, verbose = TRUE)
+
+markers$gene_symbol <- ENSEMBL_to_Symbol(markers$gene)
+```
+
+Check expression of selected marker genes by plotting them in UMAP and a dotplot. AddModuleScore() can be used to map a reference gene signature (multiple genes) on the dataset and identify clusters that might correspond to previously characterized cell populations by wider expression profile than just one or two genes (although the score can be driven by few strongly expressed genes!). Reference gene sets should be stored in .txt files in a separate directory, with first row as a header.
+
+```{r annotation}
+# Big exp. all cells
+seurat_object@meta.data %<>% mutate("seurat_annotated" = factor(case_when(  
+        seurat_clusters == "0"  ~ "Ast",   
+        seurat_clusters == "1"  ~ "Neu",   
+        seurat_clusters == "2"  ~ "Mg",   
+        seurat_clusters == "3"  ~ "Ol",  
+        seurat_clusters == "4"  ~ "Endo",    
+        seurat_clusters == "5"  ~ "Peri1",
+        seurat_clusters == "6"  ~ "Epen",  
+        seurat_clusters == "7"  ~ "Opc",   
+        seurat_clusters == "8"  ~ "Vlmc", 
+        seurat_clusters == "9"  ~ "Peri2",
+        seurat_clusters == "10" ~ "Cp",  
+        seurat_clusters == "11" ~ "Oec"
+ )))
+
+
+
+#check the table 
+seurat_object@meta.data$seurat_annotated <- factor(seurat_object@meta.data$seurat_annotated, levels = orders[["seurat_annotated_all"]])
+seurat_object$seurat_annotated %>% table()
+
+seurat_object@meta.data %<>% mutate("Isolation_pub" = factor(case_when(
+  Isolation == "Aggressive" ~ "WorthMech",
+  Isolation == "Gentle" ~ "WorthGentle",
+  Isolation == "Miltenyi"~ "Miltenyi"
+)))
+
+# Change order
+seurat_object@meta.data$Isolation_pub <- factor(seurat_object@meta.data$Isolation_pub, levels = orders[["Isolation_pub"]])
+seurat_object@meta.data$Isolation_pub %>% table()
+
+# Change order
+seurat_object@meta.data$Condition <- factor(seurat_object@meta.data$Condition, levels = orders[["samples"]])
+seurat_object@meta.data$Condition %>% table()
+
+saveRDS(seurat_object, "ws/01_all_cells/1DP_01_seurat_annotated_all_cells.rds")
+```
+
+#Supplement with cluster markers
+```{r}
+# ==========================================
+# STEP 1: MAP NUMERIC CLUSTERS TO CELL-TYPE LABELS
+# ==========================================
+
+# Create a clean lookup mapping vector based on your case_when logic
+cluster_to_celltype <- c(
+  "0"  = "Ast",     "1"  = "Neu",   "2"  = "Mg",    "3"  = "Ol",  
+  "4"  = "Endo",      "5"  = "Peri1", "6"  = "Epen",  "7"  = "Opc",   
+  "8"  = "Vlmc",  "9"  = "Peri2", "10" = "Cp",  "11" = "Oec"
+)
+
+# Assign the annotated names to a new column in your markers data frame
+markers <- markers %>%
+  mutate(cell_type_annotated = cluster_to_celltype[as.character(cluster)])
+
+# ==========================================
+# STEP 2: SPLIT THE DATA FRAME INTO A LIST BY ANNOTATION
+# ==========================================
+# This splits your massive data frame into a named list of data frames
+marker_list_by_celltype <- split(markers, markers$cell_type_annotated)
+
+# Get the custom factor order you defined for your sheets
+custom_sheet_order <- orders[["seurat_annotated_all"]]
+
+# Filter the custom order to only include sheets that actually have data present
+valid_sheet_order <- custom_sheet_order[custom_sheet_order %in% names(marker_list_by_celltype)]
+
+
+# ==========================================
+# STEP 3: GENERATE THE EXCEL WORKBOOK
+# ==========================================
+# Initialize the openxlsx workbook object
+wb <- createWorkbook()
+
+# Loop through each cell-type annotation in your exact preferred order
+for (cell_type in valid_sheet_order) {
+  
+  # Extract the specific marker data frame for this cell type
+  sub_data <- marker_list_by_celltype[[cell_type]]
+  
+  # Clean up the data frame columns for a neat excel presentation:
+  sub_data_clean <- sub_data %>%
+    # --- FIXED: Explicitly called dplyr::select to prevent package overriding ---
+    dplyr::select(gene_symbol, gene, cell_type_annotated, p_val, avg_log2FC, pct.1, pct.2, p_val_adj) %>%
+    arrange(p_val_adj, desc(avg_log2FC)) 
+  
+  # Replace characters like "/" that Excel bans from tab sheet names
+  safe_sheet_name <- gsub("/", "_", cell_type)
+  
+  # Add the worksheet tab
+  addWorksheet(wb, sheetName = safe_sheet_name)
+  
+  # Write the data into the sheet with bold headers
+  writeData(wb, sheet = safe_sheet_name, x = sub_data_clean, withFilter = TRUE)
+}
+
+# ==========================================
+# STEP 4: SAVE THE WORKBOOK
+# ==========================================
+saveWorkbook(wb, "results/supplements/1DP_01_markers_all_cells.xlsx", overwrite = TRUE)
+```

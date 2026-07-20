@@ -1,0 +1,597 @@
+---
+title: "2V_ validation_experiment"
+author: "Dominika Dostalova"
+date: "2026-04-15"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# Data processing of qPCR results
+This notebook automates the parsing, column renaming, and 384-well quadrant mapping of raw qPCR expression data to quantify and compare cell-type-specific markers (Actb, Aldh1l1, and Gfap) across the Miltenyi and WorthGentle tissue isolation protocols.
+
+```{r}
+# Define folders
+folders <- c("ws", "ws/04_validation_experiment", "results", "results/04_validation_experiment")
+
+# Create folders if they don't exist
+lapply(folders, function(f) if (!dir.exists(f)) dir.create(f, recursive = TRUE))
+```
+
+
+```{r}
+suppressMessages(library("tidyverse"))
+suppressMessages(library("magrittr"))
+suppressMessages(library("dplyr"))
+suppressMessages(library("stringr"))
+suppressMessages(library("purrr"))
+
+plots <- list()
+col_list <- list()
+orders <- list()
+source("code/0F_01_colours_orders.R", local = F, echo = F, print.eval = F)
+source("code/0F_02_general_functions.R", local = F, echo = F, print.eval = F)
+source("code/0F_03_label_names.R", local = F, echo = F, print.eval = F)
+gene_symbol <- read.table("data/all_genes.csv", header = TRUE, sep = ",")
+```
+
+
+```{r}
+# List of .csv files in folder
+file_list <- list.files("data/validation_experiment", pattern = "\\.csv$", full.names = TRUE)
+
+# Create an empty list to store each dataset
+qpcr_list <- list()
+
+# Loop through each file
+for (file in file_list) {
+  lines <- readLines(file)
+  data_start <- grep("^Well,Fluor", lines)
+
+  if (length(data_start) == 0) next  # skip malformed files
+
+  # Read the table from the correct line onward
+  df <- read.csv(text = lines[data_start:length(lines)], stringsAsFactors = FALSE)
+
+  # Create a safe name from the file name (remove extension and punctuation)
+  name <- tools::file_path_sans_ext(basename(file)) %>%
+    make.names()
+
+  # Store in list with that name
+  qpcr_list[[name]] <- df
+}
+
+# View names of stored data
+names(qpcr_list)
+
+# Access one of the data frames, e.g.
+head(qpcr_list[[1]])
+```
+
+# Rename columns
+```{r}
+for (file_name in names(qpcr_list)) {
+  df <- qpcr_list[[file_name]]
+
+  # Extract gene from filename (e.g., "admin_2025.07.08_Actb_123")
+  gene <- str_extract(file_name, "(?<=_)[A-Za-z0-9]+(?=_[0-9]+$)")  # Extracts "Actb"
+
+  # Skip if gene not found
+  if (is.na(gene)) next
+
+  # Define expected columns and generate new names
+  original_cols <- c("Cq", "Melt.Temperature", "Peak.Height")
+  new_names <- paste0(original_cols, "_", gene)
+
+  # Rename only existing columns
+  columns_to_rename <- original_cols[original_cols %in% names(df)]
+  renamed <- setNames(columns_to_rename, paste0(columns_to_rename, "_", gene))  # new = old
+
+  # Apply renaming
+  df <- df %>% rename(!!!renamed)
+
+  # Save back
+  qpcr_list[[file_name]] <- df
+}
+rm(df, gene)
+```
+
+
+# Remove unwanted columns
+```{r}
+# Columns to remove
+cols_to_remove <- c("Fluor", "Content", "Starting.Quantity..SQ.", "Target", "Peak.Height")
+
+# Loop over all list items
+for (file_name in names(qpcr_list)) {
+  df <- qpcr_list[[file_name]]
+
+  # Keep only columns that are NOT in cols_to_remove
+  df <- df %>% dplyr::select(-any_of(cols_to_remove))
+
+  qpcr_list[[file_name]] <- df
+}
+```
+
+# Add suffixes columns
+```{r}
+library(tidyverse)
+
+# Loop through each data frame in your list
+for (file_name in names(qpcr_list)) {
+  
+  # 1. Detect the gene name from the file handle
+  # We look for the gene keywords in the string
+  current_gene <- case_when(
+    str_detect(file_name, "Actb") ~ "Actb",
+    str_detect(file_name, "Aldh1l1") ~ "Aldh1l1",
+    str_detect(file_name, "Gfap") ~ "Gfap",
+    TRUE ~ "Unknown"
+  )
+  
+  # 2. Rename columns with the gene suffix
+  # We include both space and dot versions just in case
+  qpcr_list[[file_name]] <- qpcr_list[[file_name]] %>%
+    rename_with(
+      ~ paste0(.x, "_", current_gene), 
+      .cols = any_of(c("Cq", "Melt.Temperature"))
+    )
+  
+  message(paste("Applied suffix", current_gene, "to columns in:", file_name))
+}
+
+# --- Quick Check ---
+# See the new names in the first file
+colnames(qpcr_list[[1]])
+```
+
+
+```{r}
+assign_384_quadrants_v5 <- function(df, filename) {
+  
+  # 1. Detection logic for missing Mouse 4
+  # We use (?i) for case-insensitivity and check for the specific suffixes
+  is_missing_m4 <- str_detect(filename, "(?i)gentle1|milt1")
+  
+  if(is_missing_m4) {
+    message(paste("!!! Flagged as MISSING Mouse 4:", filename))
+  } else {
+    message(paste("Processing normal file:", filename))
+  }
+  
+  df %>%
+    mutate(
+      # Extract Row (A-P) and Column (1-24)
+      Row_Let = str_extract(Well, "^[A-P]"),
+      Col_Num = as.numeric(str_extract(Well, "\\d+$")),
+      
+      # 2. Quadrant Logic
+      # Rows: A-H (1:8), Rows: I-P (9:16)
+      # Columns: 1-12, Columns: 13-24
+      Sample_pub = case_when(
+        Row_Let %in% LETTERS[1:8]  & Col_Num <= 12 ~ "Mouse_1",
+        Row_Let %in% LETTERS[1:8]  & Col_Num > 12  ~ "Mouse_2",
+        Row_Let %in% LETTERS[9:16] & Col_Num <= 12 ~ "Mouse_3",
+        Row_Let %in% LETTERS[9:16] & Col_Num > 12  ~ if_else(is_missing_m4, "Empty", "Mouse_4"),
+        TRUE ~ "Unknown"
+      )
+    ) %>%
+    # Remove helper columns
+    dplyr::select(-Row_Let, -Col_Num)
+}
+
+# --- Execution ---
+# Use imap to ensure 'filename' is passed as the second argument (.y)
+qpcr_list <- imap(qpcr_list, ~ assign_384_quadrants_v5(.x, .y))
+
+# --- Verification ---
+message("\nFinal check of sample distributions:")
+map(qpcr_list, ~ table(.x$Sample_pub))
+```
+
+```{r}
+# Helper: remove columns that repeat generically across files
+clean_all_cols <- function(df) {
+  df %>% dplyr:: select(-matches("^file$"))  # optionally drop 'file' column if duplicated
+}
+
+# Helper: merge multiple files by 'Well' and keep all columns
+merge_all_columns_by_well <- function(file_names) {
+  # Start with the first cleaned df
+  merged <- clean_all_cols(qpcr_list[[file_names[1]]])
+  
+  for (fname in file_names[-1]) {
+    df <- clean_all_cols(qpcr_list[[fname]])
+    # Drop redundant columns before merging
+    merged <- full_join(merged, df, by = "Well")
+  }
+  
+  merged
+}
+
+
+# Split file names by suffix
+files_gentle1 <- names(qpcr_list)[str_detect(names(qpcr_list), "_gentle1$")]
+files_milt1 <- names(qpcr_list)[str_detect(names(qpcr_list), "_milt1$")]
+
+files_gentle2 <- names(qpcr_list)[str_detect(names(qpcr_list), "_gentle2$")]
+files_milt2 <- names(qpcr_list)[str_detect(names(qpcr_list), "_milt2$")]
+
+# Merge
+merged_gentle1 <- merge_all_columns_by_well(files_gentle1)
+saveRDS(merged_gentle1, "ws/04_validation_experiment/merged_gentle1.rds")
+
+merged_milt1 <- merge_all_columns_by_well(files_milt1)
+saveRDS(merged_milt1, "ws/04_validation_experiment/merged_milt1.rds")
+
+merged_gentle2 <- merge_all_columns_by_well(files_gentle2)
+saveRDS(merged_gentle2, "ws/04_validation_experiment/merged_gentle2.rds")
+
+merged_milt2 <- merge_all_columns_by_well(files_milt2)
+saveRDS(merged_milt2, "ws/04_validation_experiment/merged_milt2.rds")
+```
+
+
+```{r}
+merged_gentle1 <- readRDS("ws/04_validation_experiment/merged_gentle1.rds")
+merged_milt1 <- readRDS("ws/04_validation_experiment/merged_milt1.rds")
+merged_gentle2 <- readRDS("ws/04_validation_experiment/merged_gentle2.rds")
+merged_milt2 <- readRDS("ws/04_validation_experiment/merged_milt2.rds")
+
+```
+
+```{r}
+# Define empty control wells
+empty_wells <- c("H06", "H12", "H15", "H24", "P06", "P12", "P15", "P24")
+
+
+# # Add Sample_clean to merged_gentle
+merged_gentle1 <- merged_gentle1 %>%
+   mutate(Sample_clean = if_else(Well %in% empty_wells,
+                                 paste0("empty_ctrl_", Sample_pub),
+                                 Sample_pub))
+
+ # Add Sample_clean to merged_miltenyi
+ merged_milt1 <- merged_milt1 %>%
+   mutate(Sample_clean = if_else(Well %in% empty_wells,
+                                 paste0("empty_ctrl_", Sample_pub),
+                                Sample_pub))
+
+# Add Sample_clean to merged_gentle
+merged_gentle2 <- merged_gentle2 %>%
+  mutate(Sample_clean = if_else(Well %in% empty_wells,
+                                paste0("empty_ctrl_", Sample_pub),
+                                Sample_pub))
+
+# Add Sample_clean to merged_miltenyi
+merged_milt2 <- merged_milt2 %>%
+   mutate(Sample_clean = if_else(Well %in% empty_wells,
+                                 paste0("empty_ctrl_", Sample_pub),
+                                Sample_pub))
+
+
+cat("\nmerged_gentle1 Sample_clean:\n")
+print(table(merged_gentle1$Sample_clean))
+
+cat("\nmerged_milt1 Sample_clean:\n")
+print(table(merged_milt1$Sample_clean))
+
+cat("\nmerged_gentle2 Sample_clean:\n")
+print(table(merged_gentle2$Sample_clean))
+
+cat("\nmerged_milt2 Sample_clean:\n")
+print(table(merged_milt2$Sample_clean))
+
+```
+
+
+```{r}
+#Actb+ cells
+#count the positive for Gene expression
+# Count wells with valid Actb signal (Cq_Actb ≤ 30), grouped by sample
+actb_counts_gentle1 <- merged_gentle1 %>%
+  filter(
+    !is.na(Cq_Actb),
+    Cq_Actb <= 30,
+    !is.na(Melt.Temperature_Actb),
+    Melt.Temperature_Actb >= 83,
+    Melt.Temperature_Actb <= 85
+  ) %>%
+  count(Sample_clean, name = "Actb_wells")
+
+actb_counts_gentle1
+
+
+actb_counts_milt1 <- merged_milt1 %>%
+   filter(
+    !is.na(Cq_Actb),
+     Cq_Actb <= 30,
+     !is.na(Melt.Temperature_Actb),
+     Melt.Temperature_Actb >= 83,
+     Melt.Temperature_Actb <= 85
+   ) %>%
+   count(Sample_clean, name = "Actb_wells")
+ 
+actb_counts_milt1
+ 
+actb_counts_gentle2 <- merged_gentle2 %>%
+  filter(
+    !is.na(Cq_Actb),
+    Cq_Actb <= 30,
+    !is.na(Melt.Temperature_Actb),
+    Melt.Temperature_Actb >= 83,
+    Melt.Temperature_Actb <= 85
+  ) %>%
+  count(Sample_clean, name = "Actb_wells")
+
+actb_counts_gentle2
+
+actb_counts_milt2 <- merged_milt2 %>%
+   filter(
+    !is.na(Cq_Actb),
+     Cq_Actb <= 30,
+     !is.na(Melt.Temperature_Actb),
+     Melt.Temperature_Actb >= 83,
+     Melt.Temperature_Actb <= 85
+   ) %>%
+   count(Sample_clean, name = "Actb_wells")
+ 
+actb_counts_milt2
+
+```
+
+
+```{r}
+#Actb+ Aldh1l1+ cells
+#count the positive for Gene expression
+# Count wells with valid Actb signal (Cq_Actb ≤ 30), grouped by sample
+actb_aldh1l1_counts_gentle1 <- merged_gentle1 %>%
+  filter(
+    !is.na(Cq_Actb), Cq_Actb <= 30,
+    !is.na(Melt.Temperature_Actb),
+    Melt.Temperature_Actb >= 83, Melt.Temperature_Actb <= 85,
+    
+    !is.na(Cq_Aldh1l1), Cq_Aldh1l1 <= 30,
+    !is.na(Melt.Temperature_Aldh1l1),
+    Melt.Temperature_Aldh1l1 >= 83, Melt.Temperature_Aldh1l1 <= 85
+  ) %>%
+  count(Sample_clean, name = "Actb_Aldh1l1_wells")
+
+actb_aldh1l1_counts_gentle1
+
+
+ actb_aldh1l1_counts_milt1 <- merged_milt1 %>%
+   filter(
+     !is.na(Cq_Actb), Cq_Actb <= 30,
+     !is.na(Melt.Temperature_Actb),
+     Melt.Temperature_Actb >= 83, Melt.Temperature_Actb <= 85,
+     
+     !is.na(Cq_Aldh1l1), Cq_Aldh1l1 <= 30,
+     !is.na(Melt.Temperature_Aldh1l1),
+     Melt.Temperature_Aldh1l1 >= 83, Melt.Temperature_Aldh1l1 <= 85
+  ) %>%
+   count(Sample_clean, name = "Actb_Aldh1l1_wells")
+ 
+ actb_aldh1l1_counts_milt1
+ 
+ 
+ actb_aldh1l1_counts_gentle2 <- merged_gentle2 %>%
+  filter(
+    !is.na(Cq_Actb), Cq_Actb <= 30,
+    !is.na(Melt.Temperature_Actb),
+    Melt.Temperature_Actb >= 83, Melt.Temperature_Actb <= 85,
+    
+    !is.na(Cq_Aldh1l1), Cq_Aldh1l1 <= 30,
+    !is.na(Melt.Temperature_Aldh1l1),
+    Melt.Temperature_Aldh1l1 >= 83, Melt.Temperature_Aldh1l1 <= 85
+  ) %>%
+  count(Sample_clean, name = "Actb_Aldh1l1_wells")
+
+actb_aldh1l1_counts_gentle2
+
+actb_aldh1l1_counts_milt2 <- merged_milt2 %>%
+   filter(
+     !is.na(Cq_Actb), Cq_Actb <= 30,
+     !is.na(Melt.Temperature_Actb),
+     Melt.Temperature_Actb >= 83, Melt.Temperature_Actb <= 85,
+     
+     !is.na(Cq_Aldh1l1), Cq_Aldh1l1 <= 30,
+     !is.na(Melt.Temperature_Aldh1l1),
+     Melt.Temperature_Aldh1l1 >= 83, Melt.Temperature_Aldh1l1 <= 85
+  ) %>%
+   count(Sample_clean, name = "Actb_Aldh1l1_wells")
+ 
+ actb_aldh1l1_counts_milt2
+```
+
+```{r}
+#Actb+ Aldh1l1+ Gfap + cells
+#count the positive for Gene expression
+# Count wells with valid Actb signal (Cq_Actb ≤ 30), grouped by sample
+ actb_aldh1l1_gfap_counts_gentle1 <- merged_gentle1 %>%
+   filter(
+   # Actb
+     !is.na(Cq_Actb), Cq_Actb <= 30,
+     !is.na(Melt.Temperature_Actb),
+     Melt.Temperature_Actb >= 83, Melt.Temperature_Actb <= 85,
+     
+     # Aldh1l1
+     !is.na(Cq_Aldh1l1), Cq_Aldh1l1 <= 30,
+     !is.na(Melt.Temperature_Aldh1l1),
+     Melt.Temperature_Aldh1l1 >= 83, Melt.Temperature_Aldh1l1 <= 85,
+     
+     # Gfap
+     !is.na(Cq_Gfap), Cq_Gfap <= 30,
+     !is.na(Melt.Temperature_Gfap),
+     Melt.Temperature_Gfap >= 78, Melt.Temperature_Gfap <= 79
+   ) %>%
+   count(Sample_clean, name = "Actb_Aldh1l1_Gfap_wells")
+ 
+ actb_aldh1l1_gfap_counts_gentle1
+ 
+
+ actb_aldh1l1_gfap_counts_milt1 <- merged_milt1 %>%
+   filter(
+     # Actb
+     !is.na(Cq_Actb), Cq_Actb <= 30,
+     !is.na(Melt.Temperature_Actb),
+     Melt.Temperature_Actb >= 83, Melt.Temperature_Actb <= 85,
+     
+     # Aldh1l1
+     !is.na(Cq_Aldh1l1), Cq_Aldh1l1 <= 30,
+     !is.na(Melt.Temperature_Aldh1l1),
+     Melt.Temperature_Aldh1l1 >= 83, Melt.Temperature_Aldh1l1 <= 85,
+     
+     # Gfap
+     !is.na(Cq_Gfap), Cq_Gfap <= 30,
+     !is.na(Melt.Temperature_Gfap),
+     Melt.Temperature_Gfap >= 78, Melt.Temperature_Gfap <= 79
+   ) %>%
+   count(Sample_clean, name = "Actb_Aldh1l1_Gfap_wells")
+ 
+ actb_aldh1l1_gfap_counts_milt1
+ 
+ 
+ 
+  actb_aldh1l1_gfap_counts_gentle2 <- merged_gentle2 %>%
+   filter(
+   # Actb
+     !is.na(Cq_Actb), Cq_Actb <= 30,
+     !is.na(Melt.Temperature_Actb),
+     Melt.Temperature_Actb >= 83, Melt.Temperature_Actb <= 85,
+     
+     # Aldh1l1
+     !is.na(Cq_Aldh1l1), Cq_Aldh1l1 <= 30,
+     !is.na(Melt.Temperature_Aldh1l1),
+     Melt.Temperature_Aldh1l1 >= 83, Melt.Temperature_Aldh1l1 <= 85,
+     
+     # Gfap
+     !is.na(Cq_Gfap), Cq_Gfap <= 30,
+     !is.na(Melt.Temperature_Gfap),
+     Melt.Temperature_Gfap >= 78, Melt.Temperature_Gfap <= 79
+   ) %>%
+   count(Sample_clean, name = "Actb_Aldh1l1_Gfap_wells")
+ 
+ actb_aldh1l1_gfap_counts_gentle2
+ 
+
+ actb_aldh1l1_gfap_counts_milt2 <- merged_milt2 %>%
+   filter(
+     # Actb
+     !is.na(Cq_Actb), Cq_Actb <= 30,
+     !is.na(Melt.Temperature_Actb),
+     Melt.Temperature_Actb >= 83, Melt.Temperature_Actb <= 85,
+     
+     # Aldh1l1
+     !is.na(Cq_Aldh1l1), Cq_Aldh1l1 <= 30,
+     !is.na(Melt.Temperature_Aldh1l1),
+     Melt.Temperature_Aldh1l1 >= 83, Melt.Temperature_Aldh1l1 <= 85,
+     
+     # Gfap
+     !is.na(Cq_Gfap), Cq_Gfap <= 30,
+     !is.na(Melt.Temperature_Gfap),
+     Melt.Temperature_Gfap >= 78, Melt.Temperature_Gfap <= 79
+   ) %>%
+   count(Sample_clean, name = "Actb_Aldh1l1_Gfap_wells")
+ 
+ actb_aldh1l1_gfap_counts_milt2
+```
+
+```{r}
+# STEP 4: Merge all and calculate percentage
+ merged_summary_gentle1 <- actb_counts_gentle1 %>%
+   left_join(actb_aldh1l1_counts_gentle1, by = "Sample_clean") %>%
+   left_join(actb_aldh1l1_gfap_counts_gentle1, by = "Sample_clean") %>%
+   mutate(`%` = round((Actb_Aldh1l1_Gfap_wells / Actb_Aldh1l1_wells) * 100, 2))
+ 
+# # Optional: nicer column names
+ colnames(merged_summary_gentle1) <- c(
+   "Sample",
+   "Actb wells",
+   "Actb+Aldh1l1+",
+   "Actb+Aldh1l1+Gfap+",
+   "% Gfap+ from Actb+Aldh1l1+"
+ )
+ 
+ # View result
+ merged_summary_gentle1
+
+ 
+ # STEP 4: Merge all and calculate percentage
+ merged_summary_milt1 <- actb_counts_milt1 %>%
+   left_join(actb_aldh1l1_counts_milt1, by = "Sample_clean") %>%
+   left_join(actb_aldh1l1_gfap_counts_milt1, by = "Sample_clean") %>%
+   mutate(`%` = round((Actb_Aldh1l1_Gfap_wells / Actb_Aldh1l1_wells) * 100, 2))
+ 
+ # Optional: nicer column names
+ colnames(merged_summary_milt1) <- c(
+   "Sample",
+   "Actb wells",
+   "Actb+Aldh1l1+",
+   "Actb+Aldh1l1+Gfap+",
+   "% Gfap+ from Actb+Aldh1l1+"
+ )
+ 
+ # View result
+ merged_summary_milt1
+ 
+ 
+ merged_summary_gentle2 <- actb_counts_gentle2 %>%
+   left_join(actb_aldh1l1_counts_gentle2, by = "Sample_clean") %>%
+   left_join(actb_aldh1l1_gfap_counts_gentle2, by = "Sample_clean") %>%
+   mutate(`%` = round((Actb_Aldh1l1_Gfap_wells / Actb_Aldh1l1_wells) * 100, 2))
+ 
+# # Optional: nicer column names
+ colnames(merged_summary_gentle2) <- c(
+   "Sample",
+   "Actb wells",
+   "Actb+Aldh1l1+",
+   "Actb+Aldh1l1+Gfap+",
+   "% Gfap+ from Actb+Aldh1l1+"
+ )
+ 
+ # View result
+ merged_summary_gentle2
+
+ 
+ # STEP 4: Merge all and calculate percentage
+ merged_summary_milt2 <- actb_counts_milt2 %>%
+   left_join(actb_aldh1l1_counts_milt2, by = "Sample_clean") %>%
+   left_join(actb_aldh1l1_gfap_counts_milt2, by = "Sample_clean") %>%
+   mutate(`%` = round((Actb_Aldh1l1_Gfap_wells / Actb_Aldh1l1_wells) * 100, 2))
+ 
+ # Optional: nicer column names
+ colnames(merged_summary_milt2) <- c(
+   "Sample",
+   "Actb wells",
+   "Actb+Aldh1l1+",
+   "Actb+Aldh1l1+Gfap+",
+   "% Gfap+ from Actb+Aldh1l1+"
+ )
+ 
+ # View result
+ merged_summary_milt2
+```
+
+```{r}
+# Add condition column
+merged_summary_gentle1$Condition <- "WorthGentle"
+merged_summary_milt1$Condition <- "Miltenyi"
+
+merged_summary_gentle2$Condition <- "WorthGentle"
+merged_summary_milt2$Condition <- "Miltenyi"
+
+# Add condition column
+merged_summary_gentle1$Experiment <- "1st"
+merged_summary_milt1$Experiment <- "1st"
+
+merged_summary_gentle2$Experiment <- "2nd"
+merged_summary_milt2$Experiment <- "2nd"
+
+# Combine
+comparison_df <- bind_rows(merged_summary_gentle1, merged_summary_milt1, merged_summary_gentle2, merged_summary_milt2)
+```
+
+```{r}
+colnames(comparison_df)[colnames(comparison_df) == "% Gfap+ from Actb+Aldh1l1+"] <- "Gfap_pct"
+saveRDS(comparison_df, "ws/04_validation_experiment/1DP_04_processed_all_replicates.rds")
+```

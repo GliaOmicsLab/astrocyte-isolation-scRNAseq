@@ -1,0 +1,228 @@
+---
+title: "2V_01_all_cells"
+author: "Dominika Dostalova + Zuzana Matusova"
+date: "2025-07-30"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# Visualisation
+This script handles the data visualization for the outputs generated in the `1DP_01_all_cells` R Markdown file.
+
+```{r}
+suppressMessages(library("Matrix"))
+suppressMessages(library("DropletUtils"))
+suppressMessages(library("ggplot2"))
+suppressMessages(library("Seurat"))
+suppressMessages(library("SeuratObject"))
+suppressMessages(library("clustree"))
+suppressMessages(library("DoubletFinder"))
+suppressMessages(library("scProportionTest"))
+suppressMessages(library("gridExtra"))
+suppressMessages(library("dittoSeq"))
+suppressMessages(library("dplyr"))
+suppressMessages(library("SoupX"))
+suppressMessages(library("ComplexHeatmap"))
+suppressMessages(library("ggridges"))
+suppressMessages(library("SeuratWrappers"))
+suppressMessages(library("openxlsx"))
+suppressMessages(library("EnhancedVolcano"))
+suppressMessages(library("ggrepel"))
+suppressMessages(library("clusterProfiler"))
+suppressMessages(library("enrichplot"))
+suppressMessages(library("AnnotationDbi"))
+suppressMessages(library("org.Mm.eg.db"))
+suppressMessages(library("glmGamPoi"))
+suppressMessages(library("future"))
+
+plots <- list()
+col_list <- list()
+orders <- list()
+source("code/0F_01_colours_orders.R", local = F, echo = F, print.eval = F)
+source("code/0F_02_general_functions.R", local = F, echo = F, print.eval = F)
+source("code/0F_03_label_names.R", local = F, echo = F, print.eval = F)
+gene_symbol <- read.table("data/all_genes.csv", header = TRUE, sep = ",")
+```
+
+```{r}
+seurat_object <- readRDS("ws/01_all_cells/1DP_01_seurat_annotated_all_cells.rds")
+```
+
+
+#UMAP
+```{r}
+Idents(seurat_object) <- "seurat_annotated"
+plots[["UMAP_all"]] <- DimPlot(seurat_object, cols = col_list[["UMAP_all"]], pt.size = 0.1)+ ggtitle("scRNA-seq \n(all isolated cells)")+  
+  labs(color = get_label("cell_types_2l"))+
+  theme(
+    text = element_text(size = 6),
+    legend.position = "bottom", # Position the legend at the bottom
+    legend.justification.bottom = c(0.5, 0.5),
+    legend.text = element_text(size = 6, margin = margin(t = 0, r = 0, b = -1, l = 1)),    # Optional: adjust legend text size
+    legend.key.spacing.y = unit(0, "mm"),
+    legend.key.spacing.x = unit(1, "mm"),
+    legend.margin = margin(t = 0, r = 0, b = 0, l = 0),  # Margins around the legend,
+    plot.margin = margin(0, 0, 2, 0),
+    strip.text = element_text(size = 6),
+    plot.title = element_text(hjust = 0.5, size = 6, vjust = 0, face = "plain"),
+    legend.key.size = unit(2.5, "mm"),      # Control overall legend key size
+    legend.background = element_blank()
+  )  & 
+  guides(color = guide_legend(override.aes = list(size = 1)))&
+  NoAxes()
+  
+
+plots[["UMAP_all"]]
+
+ggsave(
+  filename = "results/01_all_cells/2V_01_UMAP_all_cells.tiff",
+  plot = plots[["UMAP_all"]],
+  device = "tiff",
+  width = 5.7,
+  height = 5,
+  units = "cm",
+  dpi = 600,            # Sets the high resolution
+  compression = "lzw",  # Compresses the file without losing quality
+  bg = "white"          # Ensures a solid white background
+)
+```
+
+```{r}
+#n cells
+ncol(seurat_object)
+```
+
+#Bar plot - cell populations
+```{r}
+df_bar <- dittoBarPlot(seurat_object, var = "ident", group.by = "Isolation_pub", data.out = T, split.by = "Condition")
+df_bar <- df_bar$data
+df_bar$label <- factor(df_bar$label, levels = levels(seurat_object))
+df_bar$grouping <- factor(df_bar$grouping, levels = levels(as.factor(seurat_object$Isolation_pub)))
+
+df_totals <- df_bar %>%
+  group_by(grouping, Condition) %>%
+  summarize(total_count = sum(count), .groups = 'drop')
+
+# 2. Add the geom_text layer to your plot
+plots[["barplot_all"]] <- ggplot(df_bar, aes(x = grouping, y = percent*100, fill = label)) +
+  geom_bar(position = "stack", stat = "identity", color = col_list[["borders"]], size = 0.3 ) +
+  
+  # --- ADDED THIS LAYER ---
+  geom_text(data = df_totals, 
+            aes(x = grouping, y = 101, label = total_count, fill = NULL), 
+            size = 1.5,           # Match your small font theme
+            vjust = 0.5,          # Align above the point
+            hjust = -0.2, 
+            angle = 90,
+            inherit.aes = FALSE # Prevents text from trying to use 'label' fill
+  ) +
+  # ------------------------
+  
+  facet_grid(. ~ Condition) +
+  scale_fill_manual(values = col_list[["UMAP_all"]]) + 
+  labs(x = "Samples", y = "Relative proportion \nof all isolated cells (%)", fill = get_label("cell_types")) +
+  theme_mk +
+  guides(fill = guide_legend(ncol = 1)) +
+  
+  # Updated limits to 110 to make room for the numbers at the top
+  scale_y_continuous(
+    expand = c(0, 0), 
+    limits = c(0, 117), 
+    breaks = seq(0, 100, by = 20)) +
+  
+  remove_grid +
+  theme(
+    strip.text = element_text(size = 6),
+    strip.background = element_blank(),
+    legend.position = "right",
+    plot.margin = margin(3,15,3,3),
+    axis.text.x = element_text(angle = 310, vjust = +0.1, hjust = +0.2),
+    axis.title.x = element_blank()
+  )
+
+plots[["barplot_all"]]
+
+ggsave(
+  filename = "results/01_all_cells/2V_01_barplot_all_cells.tiff",              
+  plot = plots[["barplot_all"]],         
+  device = "tiff",                          
+  width = 6,                            
+  height = 5,                              
+  units = "cm",
+  dpi = 600,            # Sets the high resolution
+  compression = "lzw",  # Compresses the file without losing quality
+  bg = "white"          # Ensures a solid white background
+)
+```
+
+#DotPlot
+```{r}
+Idents(seurat_object) <- "seurat_annotated"
+markers_all <- c("Slc7a10","Luzp2","Gpc5",
+                 "Clu","Aldoc","Aqp4",
+                 "Itgam","Csf1r","Hexb",
+                 "Syt1","Grin2a","Rbfox1",
+                  "Tnr","Dscam","Nxph1",
+                 "Adamtsl1","Plekhh1","Trf",
+                 "Mog","Opalin","Plp1",
+                 "Adgrl4","Cyyr1","Ptprb",
+                 "Tmem212","Dnah12","Cdhr3",
+                 "Slc38a11","Abcc9","Vtn",
+                 "Tbx3os1","Egflam","Ano1",
+                 "Col1a2","Cped1","Eya2",
+                 "Ttr","Htr2c","Otx2os1",
+                 "Mybpc1","Frzb","Bnc2"
+                 )
+
+# Itgam maps to two ENSEMBLIDs
+features <- Symbol_to_ENSEMBL(markers_all)
+names(features) <- ENSEMBL_to_Symbol(features)
+features <- features[unique(names(features))]
+
+plots[["dotplot_all"]] <- DotPlot(
+  seurat_object, 
+  features = as.character(features), 
+  #dot.scale = 3,  # Initial dot size scaling,
+ dot.min = 0.20 
+) + 
+  scale_x_discrete(labels = names(features)) + 
+  theme_mk + 
+  remove_grid +
+  theme(
+    axis.text.x = element_text(angle = 290, hjust = 0, vjust = 0.5, size = 6, face = "italic"), # Rotate x-axis labels
+    axis.title.x = element_blank(),                                # Remove x-axis title
+    axis.title.y = element_blank(),                                # Remove y-axis title
+    legend.position = "bottom",                                    # Position legend at the bottom
+    plot.margin = margin(2,2,2,2),                                  # Adjust plot margins
+    
+  #legend.margin = margin(b = -5, l = -3),
+  legend.box.spacing = unit(0.1, "cm"),
+  legend.box.just = "left"
+    ) +
+  scale_color_gradientn(
+    name = "Scaled average \ngene expression",   # Manually set the color legend title
+    colors = col_list[["gradient_comp"]]              # Set the high color of the gradient
+  ) +
+  scale_size_continuous(
+    name = "Pergentage \nof cells (%)",
+    range = c(0.5, 2)              # Set the range for dot sizes; adjust as needed
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "left"), # Adjust legend color bar position if needed
+    size = guide_legend(title.position = "left")     # Adjust size legend position if needed
+  )
+
+plots[["dotplot_all"]]
+
+ggsave(
+  filename = "results/01_all_cells/2V_01_dotplot_all_cells.tiff",             
+  plot = plots[["dotplot_all"]],         
+  device = "tiff",                          
+  width = 12,                              
+  height = 4.5,                              
+  units = "cm",
+  dpi = 600,            
+  compression = "lzw",  
+  bg = "white"          
+)
+```

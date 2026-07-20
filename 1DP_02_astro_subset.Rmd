@@ -1,0 +1,285 @@
+---
+title: "1DP_02_astro_subset"
+author: "Dominika Dostalova + Zuzana Matusova"
+date: "2025-07-24"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Seurat object only with astrocytes
+This notebook contains the primary preprocessing, quality control, clustering, and population annotation pipeline for a subset of astrocytes in single-cell transcriptomic study evaluating different brain tissue isolation protocols.
+
+Create folders for saving objects
+```{r Folders, eval = TRUE, echo = FALSE, message = FALSE, warning=FALSE}
+# Define folders
+folders <- c("ws", "ws/02_astro_subset", "results", "results/02_astro_subset", "results/supplements")
+
+# Create folders if they don't exist
+lapply(folders, function(f) if (!dir.exists(f)) dir.create(f, recursive = TRUE))
+```
+
+Load packages and print sessionInfo to see package versions.
+```{r packages}
+suppressMessages(library("DropletUtils"))
+suppressMessages(library("ggplot2"))
+suppressMessages(library("Seurat"))
+suppressMessages(library("SeuratObject"))
+suppressMessages(library("clustree"))
+suppressMessages(library("DoubletFinder"))
+suppressMessages(library("scProportionTest"))
+suppressMessages(library("gridExtra"))
+suppressMessages(library("dittoSeq"))
+suppressMessages(library("dplyr"))
+suppressMessages(library("SoupX"))
+suppressMessages(library("ComplexHeatmap"))
+suppressMessages(library("ggridges"))
+suppressMessages(library("SeuratWrappers"))
+suppressMessages(library("openxlsx"))
+suppressMessages(library("EnhancedVolcano"))
+suppressMessages(library("ggrepel"))
+suppressMessages(library("clusterProfiler"))
+suppressMessages(library("enrichplot"))
+suppressMessages(library("AnnotationDbi"))
+suppressMessages(library("org.Mm.eg.db"))
+suppressMessages(library("glmGamPoi"))
+suppressMessages(library("tibble"))
+sessionInfo()
+
+plots <- list()
+col_list <- list()
+orders <- list()
+source("code/0F_01_colours_orders.R", local = F, echo = F, print.eval = F)
+source("code/0F_02_general_functions.R", local = F, echo = F, print.eval = F)
+source("code/0F_03_label_names.R", local = F, echo = F, print.eval = F)
+gene_symbol <- read.table("data/all_genes.csv", header = TRUE, sep = ",")
+
+```
+
+
+Astro only
+```{r}
+seurat_object <- readRDS("ws/01_all_cells/1DP_01_seurat_annotated_all_cells.rds")
+```
+
+```{r subset}
+# Subset
+Idents(seurat_object) <- "seurat_annotated"
+seurat_object <- subset(seurat_object, ident = c("Ast"))
+expr_data <- FetchData(seurat_object, vars = Symbol_to_ENSEMBL("Aldh1l1"), layer = "data")
+cells_select <- expr_data %>% filter(.[[1]] > 0) %>% row.names
+seurat_object <- subset(seurat_object, cells = cells_select)
+```
+
+
+# normalize, scale, SCT, cluster
+Normalization and scaling of the RNA assay.
+```{r normalize}
+
+DefaultAssay(seurat_object) <- "RNA"
+all.genes.RNA <- rownames(seurat_object)
+seurat_object <- NormalizeData(seurat_object, normalization.method = "LogNormalize", scale.factor = 10000)
+seurat_object <- ScaleData(seurat_object, features = all.genes.RNA)
+
+options(future.globals.maxSize = 8 * 1024^3)
+set.seed(1234)
+seurat_object <- SCTransform(seurat_object, verbose = TRUE, return.only.var.genes = TRUE, 
+                             assay = "RNA", n_genes = NULL, variable.features.n = NULL, method = "glmGamPoi")
+```
+
+
+First, decide which assay will be used for PCA, UMAP, and clustering - integrated or SCT. In PCA, number of genes used can be reduced from all to e. g. only variable. Based on Elbow Plot decide, how many dimensions will be used in further analysis - how many is reasonable for explaining the most of the variability. Run UMAP on selected number of dimensions.
+```{r PCA}
+DefaultAssay(seurat_object) <- "SCT" # can be set to SCT or integrated
+
+
+all.genes <- row.names(seurat_object)
+
+set.seed(1234)
+seurat_object <- RunPCA(seurat_object, npcs = 50, verbose = FALSE, features = all.genes)
+print(ElbowPlot(seurat_object, ndims = 50, reduction = "pca"))
+
+ndim <- 20
+
+set.seed(1234)
+seurat_object <- RunUMAP(seurat_object, reduction = "pca", dims = 1:ndim, verbose = TRUE)
+
+set.seed(1234)
+seurat_object <- FindNeighbors(seurat_object, reduction = "pca", dims = 1:ndim, verbose = TRUE)
+
+rm(all.genes)
+```
+
+
+Proceed with clustering. Choose optimal resolution, here set to 0.5. {clustree} package can help decide, as it plots multiple resolutions and connections between the identified clusters. Based on this plot the most reasonable resolution can be selected (the one where relationships between clusters are clear and not intermixed).
+
+```{r clustree}
+# Clustree, to help with selection of optimal clustering resolution.
+
+seurat_clustree <- seurat_object
+seurat_clustree@meta.data <- seurat_clustree@meta.data %>% 
+  dplyr::select(-contains("_snn_res."))
+assay <- seurat_object@active.assay
+
+# --- Define your exact custom resolutions here ---
+custom_resolutions <- c(0.05, 0.075, 0.1, 0.15)
+
+for (resol in custom_resolutions) {
+  message("Calculating clusters for resolution: ", resol)
+  set.seed(1234)
+  seurat_clustree <- FindClusters(
+    seurat_clustree, 
+    resolution = resol, 
+    graph.name = paste0(assay, "_snn"), 
+    verbose = FALSE
+  )
+}
+
+# Print the tree graph using your custom steps
+print(clustree(seurat_clustree, prefix = paste0(assay, "_snn_res.")))
+```
+
+```{r clustering}
+# set the optimal resolution based on clustree, prior knowledge, or randomly
+
+res <- 0.075
+
+set.seed(1234)
+seurat_object <- FindClusters(seurat_object, resolution = res, verbose = TRUE)
+
+# check DimPlot using the optimal resolution
+DimPlot(seurat_object, label = T, label.box = T, repel = T) + NoLegend()
+```
+
+```{r}
+# ==========================================
+# COMPUTE CLUSTER MARKERS
+# ==========================================
+DefaultAssay(seurat_object) <- "RNA"
+Idents(seurat_object) <- "seurat_clusters"
+markers <- FindAllMarkers(seurat_object, min.pct = 0.8, logfc.threshold = 0.65, only.pos = TRUE, verbose = TRUE)
+
+# Translate Ensembl gene IDs to symbols
+markers$gene_symbol <- ENSEMBL_to_Symbol(markers$gene)
+```
+
+
+```{r}
+# ==========================================
+# ANNOTATE SEURAT METADATA
+# ==========================================
+# FIXED: Using uppercase "HOM" and "REAC" to guarantee flawless alignment with global project tracks
+seurat_object@meta.data <- seurat_object@meta.data %>% 
+  mutate(seurat_annotated_astro = factor(case_when(
+    seurat_clusters == 0 ~ "Hom",
+    seurat_clusters == 1 ~ "Reac",
+    TRUE                 ~ as.character(seurat_clusters)
+  )))
+
+print("Metadata verification count:")
+print(table(seurat_object$seurat_annotated_astro))
+
+saveRDS(seurat_object, "ws/02_astro_subset/1DP_02_seurat_annotated_astro.rds")
+```
+
+#Supplement with cluster markers
+```{r}
+# ==========================================
+# PREPARE DATA FRAMES FOR EXPORT
+# ==========================================
+# FIXED: Safe, type-independent numeric matching
+markers <- markers %>%
+  mutate(cell_type_annotated = case_when(
+    cluster == 0 ~ "Hom",
+    cluster == 1 ~ "Reac",
+    TRUE         ~ as.character(cluster)
+  ))
+
+# Drop any non-target background clusters to keep table exports tight
+markers_filtered <- markers %>% filter(cell_type_annotated %in% c("Hom", "Reac"))
+
+# Split the data frame into an indexed list by type
+marker_list_by_celltype <- split(markers_filtered, markers_filtered$cell_type_annotated)
+
+
+# ==========================================
+# RESOLVE ACTIVE EXCEL SHEET SEQUENCE
+# ==========================================
+# FIXED: Instead of calling a non-existent list level, we evaluate your environment's active custom_sheet vector
+if (exists("custom_sheet")) {
+  valid_sheet_order <- custom_sheet[custom_sheet %in% names(marker_list_by_celltype)]
+} else {
+  # Direct fallback to names present in data if the environment vector isn't loaded
+  valid_sheet_order <- names(marker_list_by_celltype)
+}
+
+message("Target sheets to write: ", paste(valid_sheet_order, collapse = ", "))
+
+
+# ==========================================
+# STEP 5: GENERATE AND WRITE EXCEL FILES
+# ==========================================
+wb <- createWorkbook()
+
+# Safety gate to throw a clear error if the layout sequence comes up empty
+if (length(valid_sheet_order) == 0) {
+  stop("CRITICAL EXPORT FAILURE: valid_sheet_order is empty! Check your custom_sheet naming values vs data keys.")
+}
+
+for (cell_type in valid_sheet_order) {
+  
+  sub_data <- marker_list_by_celltype[[cell_type]]
+  
+  # Clean up columns securely using strings
+  sub_data_clean <- sub_data %>%
+    dplyr::select("gene_symbol", "gene", "cell_type_annotated", "p_val", "avg_log2FC", "pct.1", "pct.2", "p_val_adj") %>%
+    arrange(p_val_adj, desc(avg_log2FC)) 
+  
+  safe_sheet_name <- gsub("/", "_", cell_type)
+  
+  addWorksheet(wb, sheetName = safe_sheet_name)
+  writeData(wb, sheet = safe_sheet_name, x = sub_data_clean, withFilter = TRUE)
+}
+
+# ==========================================
+# STEP 4: SAVE THE WORKBOOK
+# ==========================================
+saveWorkbook(wb, "results/supplements/1DP_02_markers_astro_subset.xlsx", overwrite = TRUE)
+```
+
+
+# Gfap+ cells - numbers
+```{r Gfap_cells} 
+gene_name <- Symbol_to_ENSEMBL("Gfap")
+seurat_object <- readRDS("ws/02_astro_subset/1DP_02_seurat_annotated_astro.rds")
+
+# Extract metadata
+seurat_object$Isolation_pub <- factor(seurat_object$Isolation_pub, levels = c("Miltenyi", "WorthGentle","WorthMech"))
+
+# Define gene
+gene_name <- Symbol_to_ENSEMBL(c("Gfap"))
+
+# Extract normalized expression
+expr_data <- FetchData(seurat_object, vars = c(gene_name, "Isolation_pub", "Condition"), layer = "data")  # This includes all cells
+expr_data_mcao <- expr_data %>% filter(Condition == "MCAO")
+
+# Calculate Mean Expression for Gfap-positive MCAO cells
+mean_expression <- expr_data_mcao %>%
+  group_by(Isolation_pub) %>%
+  summarise(mean_expr = mean(.data[[gene_name[1]]][.data[[gene_name[1]]] > 0], na.rm = TRUE))
+
+# Calculate total cell counts and positive expressors within MCAO
+cell_summary <- expr_data_mcao %>%
+  group_by(Isolation_pub) %>%
+  summarise(
+    Total_Cells = n(),  # Total number of MCAO cells
+    Expressing_Cells = sum(.data[[gene_name[1]]] > 0)
+  )
+
+# Compute percentage of Gfap+ cells out of all MCAO cells
+cell_summary <- cell_summary %>%
+  mutate(Percent_Gene_Positive = round((Expressing_Cells / Total_Cells) * 100, 1))
+
+
+saveRDS(cell_summary, "ws/02_astro_subset/1DP_02_Gfap_cell_summary.rds")
+```
