@@ -17,6 +17,8 @@ suppressMessages(library("magrittr"))
 suppressMessages(library("dplyr"))
 suppressMessages(library("stringr"))
 suppressMessages(library("purrr"))
+suppressMessages(library("ggpubr"))
+
 
 plots <- list()
 col_list <- list()
@@ -80,3 +82,15 @@ ggsave(
 )
 
 ```
+
+```{r}
+#
+# Two-sample t-test (gives the exact difference in means and the 95% CI)
+ttest_res <- t.test(Gfap_pct ~ Condition, data = comparison_df)
+print(ttest_res)
+
+# Calculate Cohen's d (effect size)
+library(rstatix)
+cohens_d(Gfap_pct ~ Condition, data = comparison_df)
+```
+

@@ -290,3 +290,11 @@ ggsave(
   bg = "white"
 )
 ```
+
+```{r}
+# number of analysed spots 
+spatial_counts <- cell_summary[cell_summary$sample %in% c("Ctrl", "7DPI"), 
+                               c("sample", "Total_Cells", "High_Expressing_Cells", "Percent_Integer")]
+spatial_counts
+```
+

@@ -51,6 +51,7 @@ gene_symbol <- read.table("data/all_genes.csv", header = TRUE, sep = ",")
 seurat_object <- readRDS("ws/02_astro_subset/1DP_02_seurat_annotated_astro.rds")
 ```
 
+
 #UMAP cell type
 ```{r}
 plots[["UMAP_all"]] <- DimPlot(seurat_object, group.by = "seurat_annotated_astro", cols = col_list[["UMAP_astro"]], pt.size = 0.1) + 
@@ -436,12 +437,12 @@ plots[["bar_plot"]] <- ggplot(cell_summary, aes(x = Isolation_pub, y = Total_Cel
   geom_bar(aes(y = Expressing_Cells, fill = "Gfap+"), color = "#2d1800", stat = "identity", size = 0.3) +  
   geom_text(aes(y = Expressing_Cells + 50, label = paste0(Percent_Integer, "%")), size = 2, vjust = 0) +  
   
-  ggpubr::stat_pvalue_manual(
-    pval_df,
-    label = "p.adj.signif",
-    tip.length = 0.01,
-    size = 2.2
-  ) +
+ # ggpubr::stat_pvalue_manual(
+ #   pval_df,
+ #   label = "p.adj.signif",
+ #   tip.length = 0.01,
+ #   size = 2.2
+ # ) +
   theme_mk_title +
   labs(
     title = get_label("our_sc_astro_mcao"),
@@ -461,7 +462,7 @@ plots[["bar_plot"]] <- ggplot(cell_summary, aes(x = Isolation_pub, y = Total_Cel
       "Gfap+" = get_label("Gfap+")
     )
   ) +
-  scale_y_continuous(expand = c(0, 0), limits = c(0, 1450)) 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1250)) 
 
 plots[["bar_plot"]]
 
@@ -478,6 +479,15 @@ ggsave(
   bg = "white" 
 )
 
+```
+
+```{r}
+# Print total cell counts per protocol
+print("--- TOTAL CELLS PER ISOLATION PROTOCOL ---")
+print(cell_summary[, c("Isolation_pub", "Total_Cells")])
+
+# Print the overall total across all protocols
+cat("\nOverall Total Cells:", sum(cell_summary$Total_Cells), "\n")
 ```
 
 #UMAP divided into isolation protocol
@@ -518,7 +528,7 @@ for (cond in conditions_in_data) {
           plot.margin = margin(2, 2, 2, 2)
         ) & NoAxes()
       
-      p <- p + annotate("text", x = Inf, y = -Inf, label = paste0("n = ", n_cells), 
+      p <- p + annotate("text", x = Inf, y = -Inf, label = bquote(italic(n) == .(n_cells)), 
                         hjust = 1.5, vjust = 0, size = 2)
     } else {
       p <- ggplot() + theme_void() 
@@ -579,7 +589,7 @@ ggsave(
 ```
 
 ```{r}
-
+# number of cells per condition
 cell_summary <- seurat_object@meta.data %>%
   group_by(Isolation_pub, Condition) %>%
   summarise(n_cells = n()) %>%

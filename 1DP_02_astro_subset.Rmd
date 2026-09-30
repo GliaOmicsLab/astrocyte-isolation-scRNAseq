@@ -62,6 +62,58 @@ Astro only
 seurat_object <- readRDS("ws/01_all_cells/1DP_01_seurat_annotated_all_cells.rds")
 ```
 
+```{r}
+#Excluded Aldh1l1 neg cells from astrocytes
+
+# 1. Ensure active ident is set to annotated cell types and subset Astrocytes
+Idents(seurat_object) <- "seurat_annotated"
+astro_cluster <- subset(seurat_object, idents = "Ast")
+
+# 2. Set default assay to RNA
+DefaultAssay(astro_cluster) <- "RNA"
+
+# 3. Retrieve Ensembl ID for Aldh1l1
+aldh1l1_id <- Symbol_to_ENSEMBL("Aldh1l1")
+
+# 4. Fetch Aldh1l1 expression and metadata
+expr_data_cond <- FetchData(
+  astro_cluster, 
+  vars = c(aldh1l1_id, "Isolation_pub", "Condition"), 
+  layer = "data"
+)
+
+# Safely rename the gene expression column by matching its Ensembl ID name
+colnames(expr_data_cond)[colnames(expr_data_cond) == aldh1l1_id] <- "Aldh1l1"
+
+# 5. Summarise per protocol and condition
+exclusion_by_cond <- expr_data_cond %>%
+  group_by(Isolation_pub, Condition) %>%
+  summarise(
+    Total = n(),
+    Retained = sum(Aldh1l1 > 0),
+    Excluded = sum(Aldh1l1 == 0),
+    Pct_Excluded = round((Excluded / Total) * 100, 2),
+    .groups = "drop"
+  )
+
+cat("\n=== EXCLUSION BY PROTOCOL & CONDITION ===\n")
+print(as.data.frame(exclusion_by_cond))
+
+# 6. Summarise per isolation protocol overall
+exclusion_by_protocol <- expr_data_cond %>%
+  group_by(Isolation_pub) %>%
+  summarise(
+    Total_in_Ast = n(),
+    Retained_Aldh1l1_pos = sum(Aldh1l1 > 0),
+    Excluded_Aldh1l1_zero = sum(Aldh1l1 == 0),
+    Pct_Excluded = round((Excluded_Aldh1l1_zero / Total_in_Ast) * 100, 2),
+    .groups = "drop"
+  )
+
+cat("\n=== EXCLUSION BY PROTOCOL OVERALL ===\n")
+print(as.data.frame(exclusion_by_protocol))
+```
+
 ```{r subset}
 # Subset
 Idents(seurat_object) <- "seurat_annotated"
@@ -183,11 +235,25 @@ saveRDS(seurat_object, "ws/02_astro_subset/1DP_02_seurat_annotated_astro.rds")
 ```
 
 #Supplement with cluster markers
+
+```{r}
+seurat_object <- readRDS("ws/02_astro_subset/1DP_02_seurat_annotated_astro.rds")
+# ==========================================
+# COMPUTE CLUSTER MARKERS
+# ==========================================
+DefaultAssay(seurat_object) <- "RNA"
+Idents(seurat_object) <- "seurat_clusters"
+markers <- FindAllMarkers(seurat_object, min.pct = 0.8, logfc.threshold = 0.65, only.pos = TRUE, verbose = TRUE)
+
+# Translate Ensembl gene IDs to symbols
+markers$gene_symbol <- ENSEMBL_to_Symbol(markers$gene)
+```
+
 ```{r}
 # ==========================================
 # PREPARE DATA FRAMES FOR EXPORT
 # ==========================================
-# FIXED: Safe, type-independent numeric matching
+# Safe, type-independent numeric matching
 markers <- markers %>%
   mutate(cell_type_annotated = case_when(
     cluster == 0 ~ "Hom",
@@ -195,56 +261,39 @@ markers <- markers %>%
     TRUE         ~ as.character(cluster)
   ))
 
-# Drop any non-target background clusters to keep table exports tight
-markers_filtered <- markers %>% filter(cell_type_annotated %in% c("Hom", "Reac"))
-
-# Split the data frame into an indexed list by type
-marker_list_by_celltype <- split(markers_filtered, markers_filtered$cell_type_annotated)
-
-
-# ==========================================
-# RESOLVE ACTIVE EXCEL SHEET SEQUENCE
-# ==========================================
-# FIXED: Instead of calling a non-existent list level, we evaluate your environment's active custom_sheet vector
+# Define sheet / cluster factor order
 if (exists("custom_sheet")) {
-  valid_sheet_order <- custom_sheet[custom_sheet %in% names(marker_list_by_celltype)]
+  valid_order <- custom_sheet[custom_sheet %in% c("Hom", "Reac")]
 } else {
-  # Direct fallback to names present in data if the environment vector isn't loaded
-  valid_sheet_order <- names(marker_list_by_celltype)
+  valid_order <- c("Hom", "Reac")
 }
 
-message("Target sheets to write: ", paste(valid_sheet_order, collapse = ", "))
-
-
-# ==========================================
-# STEP 5: GENERATE AND WRITE EXCEL FILES
-# ==========================================
-wb <- createWorkbook()
-
-# Safety gate to throw a clear error if the layout sequence comes up empty
-if (length(valid_sheet_order) == 0) {
-  stop("CRITICAL EXPORT FAILURE: valid_sheet_order is empty! Check your custom_sheet naming values vs data keys.")
-}
-
-for (cell_type in valid_sheet_order) {
-  
-  sub_data <- marker_list_by_celltype[[cell_type]]
-  
-  # Clean up columns securely using strings
-  sub_data_clean <- sub_data %>%
-    dplyr::select("gene_symbol", "gene", "cell_type_annotated", "p_val", "avg_log2FC", "pct.1", "pct.2", "p_val_adj") %>%
-    arrange(p_val_adj, desc(avg_log2FC)) 
-  
-  safe_sheet_name <- gsub("/", "_", cell_type)
-  
-  addWorksheet(wb, sheetName = safe_sheet_name)
-  writeData(wb, sheet = safe_sheet_name, x = sub_data_clean, withFilter = TRUE)
-}
+# Filter, order, and select relevant columns
+markers_clean <- markers %>%
+  filter(cell_type_annotated %in% c("Hom", "Reac")) %>%
+  mutate(cell_type_annotated = factor(cell_type_annotated, levels = valid_order)) %>%
+  arrange(cell_type_annotated, p_val_adj, desc(avg_log2FC)) %>%
+  dplyr::select(
+    gene_symbol,
+    gene,
+    cell_type_annotated,
+    p_val,
+    avg_log2FC,
+    pct.1,
+    pct.2,
+    p_val_adj
+  )
 
 # ==========================================
-# STEP 4: SAVE THE WORKBOOK
+# SAVE AS CSV
 # ==========================================
-saveWorkbook(wb, "results/supplements/1DP_02_markers_astro_subset.xlsx", overwrite = TRUE)
+write.csv(
+  x         = markers_clean,
+  file      = "results/supplements/1DP_02_markers_astro_subset.csv",
+  row.names = FALSE
+)
+
+message("Saved astrocyte subset markers CSV successfully. Total rows: ", nrow(markers_clean))
 ```
 
 

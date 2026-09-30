@@ -314,6 +314,10 @@ saveRDS(seurat_object, "ws/01_all_cells/01_seurat_filtered_ACSA2_all_cells.rds")
 Clusters can be annotated based on expression of their marker genes. This information is usually combined with cluster-specific expression of known canonical markers of the expected cell populations.
 
 First, marker genes specific for the current dataset are calculated. Parameters can be adjusted to be more stringent or conversely, more loose, depending on individual requirements.
+```{r}
+seurat_object <- readRDS("ws/01_all_cells/01_seurat_filtered_ACSA2_all_cells.rds")
+```
+
 
 ```{r markers}
 DefaultAssay(seurat_object) <- "RNA"
@@ -367,64 +371,56 @@ saveRDS(seurat_object, "ws/01_all_cells/1DP_01_seurat_annotated_all_cells.rds")
 
 #Supplement with cluster markers
 ```{r}
+seurat_object <- readRDS("ws/01_all_cells/1DP_01_seurat_annotated_all_cells.rds")
+```
+
+```{r}
 # ==========================================
 # STEP 1: MAP NUMERIC CLUSTERS TO CELL-TYPE LABELS
 # ==========================================
 
-# Create a clean lookup mapping vector based on your case_when logic
+# Lookup vector mapping cluster IDs to cell types
 cluster_to_celltype <- c(
-  "0"  = "Ast",     "1"  = "Neu",   "2"  = "Mg",    "3"  = "Ol",  
-  "4"  = "Endo",      "5"  = "Peri1", "6"  = "Epen",  "7"  = "Opc",   
-  "8"  = "Vlmc",  "9"  = "Peri2", "10" = "Cp",  "11" = "Oec"
+  "0"  = "Ast",   "1"  = "Neu",   "2"  = "Mg",    "3"  = "Ol",  
+  "4"  = "Endo",  "5"  = "Peri1", "6"  = "Epen",  "7"  = "Opc",   
+  "8"  = "Vlmc",  "9"  = "Peri2", "10" = "Cp",    "11" = "Oec"
 )
 
-# Assign the annotated names to a new column in your markers data frame
+# Assign cell-type annotations
 markers <- markers %>%
   mutate(cell_type_annotated = cluster_to_celltype[as.character(cluster)])
 
 # ==========================================
-# STEP 2: SPLIT THE DATA FRAME INTO A LIST BY ANNOTATION
+# STEP 2: FORMAT, ORDER, AND SELECT COLUMNS
 # ==========================================
-# This splits your massive data frame into a named list of data frames
-marker_list_by_celltype <- split(markers, markers$cell_type_annotated)
-
-# Get the custom factor order you defined for your sheets
 custom_sheet_order <- orders[["seurat_annotated_all"]]
 
-# Filter the custom order to only include sheets that actually have data present
-valid_sheet_order <- custom_sheet_order[custom_sheet_order %in% names(marker_list_by_celltype)]
-
-
-# ==========================================
-# STEP 3: GENERATE THE EXCEL WORKBOOK
-# ==========================================
-# Initialize the openxlsx workbook object
-wb <- createWorkbook()
-
-# Loop through each cell-type annotation in your exact preferred order
-for (cell_type in valid_sheet_order) {
-  
-  # Extract the specific marker data frame for this cell type
-  sub_data <- marker_list_by_celltype[[cell_type]]
-  
-  # Clean up the data frame columns for a neat excel presentation:
-  sub_data_clean <- sub_data %>%
-    # --- FIXED: Explicitly called dplyr::select to prevent package overriding ---
-    dplyr::select(gene_symbol, gene, cell_type_annotated, p_val, avg_log2FC, pct.1, pct.2, p_val_adj) %>%
-    arrange(p_val_adj, desc(avg_log2FC)) 
-  
-  # Replace characters like "/" that Excel bans from tab sheet names
-  safe_sheet_name <- gsub("/", "_", cell_type)
-  
-  # Add the worksheet tab
-  addWorksheet(wb, sheetName = safe_sheet_name)
-  
-  # Write the data into the sheet with bold headers
-  writeData(wb, sheet = safe_sheet_name, x = sub_data_clean, withFilter = TRUE)
-}
+markers_clean <- markers %>%
+  # Filter to recognized cell types and order according to your factor levels
+  filter(cell_type_annotated %in% custom_sheet_order) %>%
+  mutate(cell_type_annotated = factor(cell_type_annotated, levels = custom_sheet_order)) %>%
+  # Arrange first by cell type, then by significance and fold change
+  arrange(cell_type_annotated, p_val_adj, desc(avg_log2FC)) %>%
+  # Select and arrange the exact columns
+  dplyr::select(
+    gene_symbol, 
+    gene, 
+    cell_type_annotated, 
+    p_val, 
+    avg_log2FC, 
+    pct.1, 
+    pct.2, 
+    p_val_adj
+  )
 
 # ==========================================
-# STEP 4: SAVE THE WORKBOOK
+# STEP 3: EXPORT AS A SINGLE CSV FILE
 # ==========================================
-saveWorkbook(wb, "results/supplements/1DP_01_markers_all_cells.xlsx", overwrite = TRUE)
+write.csv(
+  x         = markers_clean, 
+  file      = "results/supplements/1DP_01_markers_all_cells.csv", 
+  row.names = FALSE
+)
+
+message("Saved markers CSV successfully. Total rows: ", nrow(markers_clean))
 ```

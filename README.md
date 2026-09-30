@@ -1,7 +1,7 @@
 **Welcome!**
 ---
 These scripts guide you through the analysis of single-cell (scRNA-seq) data generated from astrocyte enrichment experiments using three different isolation protocols.
-These data support the publication titled: **Tissue dissociation protocols dictate reactive astrocyte recovery in single-cell transcriptomics** (DOI: ).
+These data support the publication titled: **Tissue dissociation workflows influence reactive astrocyte recovery in single-cell transcriptomics** (DOI: ).
 
 The raw data are publicly available on [NCBI GEO](https://). The processed single-cell RNA-sequencing data, curated as an annotated Seurat object, are available on [Zenodo](https://zenodo.org/records/).
 

@@ -58,7 +58,7 @@ lapply(folders, function(f) if (!dir.exists(f)) dir.create(f, recursive = TRUE))
 
 #Violin plots for astro cells 
 ```{r}
-#seurat_object <- readRDS("ws/02_astro_subset/1DP_02_seurat_annotated_astro.rds")
+seurat_object <- readRDS("ws/02_astro_subset/1DP_02_seurat_annotated_astro.rds")
 
 meta_data <- seurat_object@meta.data
 
@@ -115,3 +115,344 @@ median_by_isolation <- meta_data %>%
 # View the results
 print(median_by_isolation)
 ```
+
+```{r}
+# A. Doublet removal rates from the pre-filtering DoubletFinder checkpoint
+seurat_df <- readRDS("ws/01_all_cells/01_seurat_doubletFinder_ACSA2_all_cells.rds")
+# B. Cell yield and astrocyte purity from all annotated cells
+seurat_all <- readRDS("ws/01_all_cells/1DP_01_seurat_annotated_all_cells.rds")
+
+```
+
+
+#QC at the sample level
+```{r}
+meta_data <- seurat_object@meta.data
+
+# Generate plots with your specific faceting and theme
+# Use facet_grid(. ~ Condition) to put conditions side-by-side
+p1 <- violin_boxplot(meta_data, "nFeature_RNA", get_label("nFeature_RNA")) + 
+  facet_grid(. ~ Condition, drop = TRUE) + 
+  scale_y_log10(labels = add_sci_superscript) +
+  violin_theme +
+  theme(axis.text.x = element_blank())
+
+p2 <- violin_boxplot(meta_data, "nCount_RNA", get_label("nCount_RNA")) + 
+  facet_grid(. ~ Condition, drop = TRUE) + 
+  scale_y_log10(labels = add_sci_superscript) +
+  violin_theme +
+  theme(strip.text = element_blank(),
+        axis.text.x = element_blank())
+
+p3 <- violin_boxplot(meta_data, "percent.mt", get_label("percent.mt")) + 
+  facet_grid(. ~ Condition, drop = TRUE) + 
+  violin_theme +
+  theme(strip.text = element_blank(),
+        axis.text.x = element_blank())
+
+p4 <- violin_boxplot(meta_data, "percent.rib", get_label("percent.rib")) + 
+  facet_grid(. ~ Condition, drop = TRUE) + 
+  violin_theme +
+  theme(strip.text = element_blank())
+
+# Combine using grid.arrange
+plots[["violin"]] <- p1 / p2 / p3 / p4
+plots[["violin"]]
+
+ggsave(
+  filename = "results/06_technical_parameters/2V_06_violinplot_astro_isol_astro_per_sample.tiff",             
+  plot = plots[["violin"]],         
+  device = "tiff",                          
+  width = 10,                              
+  height = 11,                              
+  units = "cm",
+  dpi = 600,            
+  compression = "lzw",  
+  bg = "white" 
+)
+```
+
+```{r}
+# Calculate medians grouped by Condition and Isolation protocol to match the faceted plot
+median_by_condition_isolation <- meta_data %>%
+  group_by(Condition, Isolation_pub) %>%
+  summarise(
+    Median_nFeature    = median(nFeature_RNA, na.rm = TRUE),
+    Median_nCount      = median(nCount_RNA, na.rm = TRUE),
+    Median_percent_mt  = median(percent.mt, na.rm = TRUE),
+    Median_percent_rib = median(percent.rib, na.rm = TRUE),
+    Cell_Count         = n(),
+    .groups = "drop"
+  )
+
+# View the results
+print(as.data.frame(median_by_condition_isolation))
+```
+
+```{r}
+
+# ------------------------------------------------------------------------------
+# 1. COMPUTE PER-CONDITION METRICS
+# ------------------------------------------------------------------------------
+
+# A. Doublet removal rates (from the pre-filtering DoubletFinder checkpoint)
+df_meta <- seurat_df@meta.data
+if (!"Isolation_pub" %in% colnames(df_meta)) {
+  df_meta <- df_meta %>% mutate(Isolation_pub = factor(case_when(
+    Isolation == "Aggressive" ~ "WorthMech",
+    Isolation == "Gentle"     ~ "WorthGentle",
+    Isolation == "Miltenyi"   ~ "Miltenyi"
+  )))
+}
+
+doublet_stats <- df_meta %>%
+  group_by(Condition, Isolation_pub) %>%
+  summarise(
+    Total_Cells_Pre_DF = n(),
+    High_Conf_Doublets = sum(Doublet == "Doublet - High Confidence", na.rm = TRUE),
+    Pct_Doublets_Removed = (High_Conf_Doublets / Total_Cells_Pre_DF) * 100,
+    .groups = "drop"
+  )
+
+# B. Filtered Cell Yield and Astrocyte Purity (from all annotated cells)
+all_meta <- seurat_all@meta.data
+
+purity_stats <- all_meta %>%
+  group_by(Condition, Isolation_pub) %>%
+  summarise(
+    Cell_Yield = n(),
+    Astrocyte_Count = sum(seurat_annotated == "Ast", na.rm = TRUE),
+    Pct_Astrocyte_Purity = (Astrocyte_Count / Cell_Yield) * 100,
+    .groups = "drop"
+  )
+
+# Merge into a single summary table
+sample_bar_data <- left_join(doublet_stats, purity_stats, by = c("Condition", "Isolation_pub"))
+
+# Ensure Condition and Isolation_pub factor levels match your global project orders
+sample_bar_data$Condition <- factor(sample_bar_data$Condition, levels = orders[["samples"]])
+sample_bar_data$Isolation_pub <- factor(sample_bar_data$Isolation_pub, levels = orders[["Isolation_pub"]])
+
+# ------------------------------------------------------------------------------
+# 2. GENERATE FACETED BAR PLOTS (Order: 1. Yield, 2. Doublets, 3. Purity)
+# ------------------------------------------------------------------------------
+
+# Border color fallback if not defined in col_list
+border_col <- if(!is.null(col_list[["borders"]])) col_list[["borders"]] else "black"
+
+# Panel 1: Filtered Cell Yield
+b1 <- ggplot(sample_bar_data, aes(x = Isolation_pub, y = Cell_Yield, fill = Isolation_pub)) +
+  geom_col(color = border_col, linewidth = 0.25, width = 0.7) +
+  facet_grid(. ~ Condition, drop = TRUE) +
+  scale_fill_manual(values = col_list[["isol_prot"]]) +
+  labs(y = "Total cell yield", x = "Isolation") +
+  theme_mk + remove_grid + violin_theme +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_blank()
+  )
+
+# Panel 2: Doublets Removed (%)
+b2 <- ggplot(sample_bar_data, aes(x = Isolation_pub, y = Pct_Doublets_Removed, fill = Isolation_pub)) +
+  geom_col(color = border_col, linewidth = 0.25, width = 0.7) +
+  facet_grid(. ~ Condition, drop = TRUE) +
+  scale_fill_manual(values = col_list[["isol_prot"]]) +
+  labs(y = "Doublets removed (%)", x = "Isolation") +
+  theme_mk + remove_grid + violin_theme +
+  theme(
+    legend.position = "none",
+    strip.text = element_blank(),
+    axis.text.x = element_blank()
+  )
+
+# Panel 3: Astrocyte Purity (%) - bottom plot with angled x-axis labels
+b3 <- ggplot(sample_bar_data, aes(x = Isolation_pub, y = Pct_Astrocyte_Purity, fill = Isolation_pub)) +
+  geom_col(color = border_col, linewidth = 0.25, width = 0.7) +
+  facet_grid(. ~ Condition, drop = TRUE) +
+  scale_fill_manual(values = col_list[["isol_prot"]]) +
+  labs(y = "Astrocyte purity (%)", x = "Isolation") +
+  theme_mk + remove_grid + violin_theme +
+  theme(
+    legend.position = "none",
+    strip.text = element_blank(),
+    axis.text.x = element_text(angle = 310, vjust = 0.1, hjust = 0.2)
+  )
+
+# Combine vertically using patchwork
+plots[["barplots_technical"]] <- b1 / b2 / b3
+plots[["barplots_technical"]]
+
+# Save matching your tiff resolution and sizing
+ggsave(
+  filename = "results/06_technical_parameters/2V_06_barplot_astro_qc_per_condition.tiff",
+  plot = plots[["barplots_technical"]],
+  device = "tiff",
+  width = 7,
+  height = 11,
+  units = "cm",
+  dpi = 600,
+  compression = "lzw",
+  bg = "white"
+)
+
+```
+
+```{r}
+# data for barplot
+print(as.data.frame(sample_bar_data[, c("Condition", "Isolation_pub", "Cell_Yield", "Pct_Doublets_Removed", "Pct_Astrocyte_Purity")]))
+```
+
+#Fitlering of cells
+```{r}
+# ==============================================================================
+# AUDIT SCRIPT: CELL RETENTION & FILTERING TRACKER ACROSS ALL SAMPLES
+# ==============================================================================
+suppressMessages({
+  library(Seurat)
+  library(dplyr)
+  library(tidyr)
+  library(tibble)
+  library(stringr)
+})
+
+cat("Loading pipeline checkpoint RDS objects...\n")
+
+# 1. Load objects
+s_raw <- readRDS("data/seurat_Isolation_only.rds")
+s_df  <- readRDS("ws/01_all_cells/01_seurat_doubletFinder_ACSA2_all_cells.rds")
+s_annotated_all <- readRDS("ws/01_all_cells/1DP_01_seurat_annotated_all_cells.rds")
+s_astro <- readRDS("ws/02_astro_subset/1DP_02_seurat_annotated_astro.rds")
+
+# Determine sample column name safely across objects
+sample_col <- if ("sample" %in% colnames(s_raw@meta.data)) "sample" else "SampleName"
+
+# ==============================================================================
+# STEP 1: EXTRACT BARCODES & MAP TO PUBLICATION PROTOCOL NAMES
+# ==============================================================================
+
+# Checkpoint 1: Initial barcodes loaded into Seurat
+df_step1 <- s_raw@meta.data %>%
+  rownames_to_column(var = "barcode") %>%
+  dplyr::select(barcode, Raw_Sample = !!sym(sample_col))
+
+# If "Isolation_pub" exists in s_annotated_all, transfer the publication name:
+if ("Isolation_pub" %in% colnames(s_annotated_all@meta.data)) {
+  pub_lookup <- s_annotated_all@meta.data %>%
+    rownames_to_column(var = "barcode") %>%
+    dplyr::select(barcode, Protocol = Isolation_pub)
+  
+  df_step1 <- df_step1 %>%
+    left_join(pub_lookup, by = "barcode")
+}
+
+# Standardize names to publication nomenclature (Condition + Publication Protocol)
+# Aggressive -> WorthMech, Gentle -> WorthGentle, Miltenyi -> Miltenyi
+df_step1 <- df_step1 %>%
+  mutate(
+    Sample = case_when(
+      # If Protocol column was mapped from Isolation_pub, combine condition & protocol:
+      !is.na(Protocol) & str_detect(Raw_Sample, "^(Ctrl|MCAO|Tau)") ~ 
+        paste0(str_extract(Raw_Sample, "^[A-Za-z]+"), "_", Protocol),
+      # Direct replacement of internal names to Isol_pub convention:
+      str_detect(Raw_Sample, "Aggressive") ~ str_replace(Raw_Sample, "Aggressive", "WorthMech"),
+      str_detect(Raw_Sample, "Gentle")     ~ str_replace(Raw_Sample, "Gentle", "WorthGentle"),
+      str_detect(Raw_Sample, "Miltenyi")   ~ str_replace(Raw_Sample, "Miltenyi", "Miltenyi"),
+      TRUE ~ Raw_Sample
+    ),
+    Step1_Initial_Loaded = 1
+  ) %>%
+  dplyr::select(barcode, Sample, Step1_Initial_Loaded)
+
+# Checkpoint 2: Survived basic QC
+df_step2 <- s_df@meta.data %>%
+  rownames_to_column(var = "barcode") %>%
+  dplyr::select(barcode, Doublet_Status = Doublet) %>%
+  mutate(Step2_Passed_Basic_QC = 1)
+
+# Checkpoint 3: Survived DoubletFinder
+df_step3 <- s_annotated_all@meta.data %>%
+  rownames_to_column(var = "barcode") %>%
+  dplyr::select(barcode, Cell_Type = seurat_annotated) %>%
+  mutate(Step3_Passed_DoubletFinder = 1)
+
+# Checkpoint 4: Astrocytes (broad cluster 'Ast')
+barcodes_ast_all <- s_annotated_all@meta.data %>%
+  rownames_to_column(var = "barcode") %>%
+  filter(seurat_annotated == "Ast") %>%
+  pull(barcode)
+
+# Checkpoint 5: Astrocytes retained after Aldh1l1 > 0 filtering
+barcodes_ast_aldh1l1 <- rownames(s_astro@meta.data)
+
+# ==============================================================================
+# STEP 2: BUILD MASTER CELL-TRACKING TABLE
+# ==============================================================================
+master_cells <- df_step1 %>%
+  left_join(df_step2, by = "barcode") %>%
+  left_join(df_step3, by = "barcode") %>%
+  mutate(
+    Step2_Passed_Basic_QC = replace_na(Step2_Passed_Basic_QC, 0),
+    Step3_Passed_DoubletFinder = replace_na(Step3_Passed_DoubletFinder, 0),
+    Step4_Ast_Cluster = as.integer(barcode %in% barcodes_ast_all),
+    Step5_Ast_Aldh1l1_Positive = as.integer(barcode %in% barcodes_ast_aldh1l1),
+    Exclusion_Stage = case_when(
+      Step2_Passed_Basic_QC == 0 ~ "Removed: Basic QC (percent.mt >= 20 | nFeature <= 500)",
+      Step3_Passed_DoubletFinder == 0 ~ "Removed: DoubletFinder (Doublet - High Confidence)",
+      Step4_Ast_Cluster == 0 ~ "Retained in non-astrocyte cluster",
+      Step5_Ast_Aldh1l1_Positive == 0 ~ "Removed: Astrocyte Aldh1l1-negative",
+      TRUE ~ "Retained: Aldh1l1+ Astrocyte"
+    )
+  )
+
+# ==============================================================================
+# STEP 3: AGGREGATE SUMMARY TABLE PER BIOLOGICAL SAMPLE
+# ==============================================================================
+# Define publication display order
+order_levels <- c(
+  "Ctrl_Miltenyi", "Ctrl_WorthGentle", "Ctrl_WorthMech",
+  "MCAO_Miltenyi", "MCAO_WorthGentle", "MCAO_WorthMech",
+  "Tau_Miltenyi", "Tau_WorthGentle", "Tau_WorthMech"
+)
+
+filtering_summary_per_sample <- master_cells %>%
+  mutate(Sample = factor(Sample, levels = order_levels)) %>%
+  group_by(Sample) %>%
+  summarise(
+    `1. Input Barcodes (Post-Parse/emptyDrops)` = n(),
+    `2. Excluded: Basic QC (mt >= 20% or nFeature <= 500)` = sum(Step2_Passed_Basic_QC == 0),
+    `3. Passed Basic QC` = sum(Step2_Passed_Basic_QC == 1),
+    `4. Excluded: High-Confidence Doublets` = sum(Step2_Passed_Basic_QC == 1 & Step3_Passed_DoubletFinder == 0),
+    `5. Retained Singlets (All Cells)` = sum(Step3_Passed_DoubletFinder == 1),
+    `6. Annotated as Astrocytes (Ast)` = sum(Step4_Ast_Cluster == 1),
+    `7. Excluded: Astrocytes Aldh1l1 == 0` = sum(Step4_Ast_Cluster == 1 & Step5_Ast_Aldh1l1_Positive == 0),
+    `8. Final Retained Astrocytes (Aldh1l1+)` = sum(Step5_Ast_Aldh1l1_Positive == 1),
+    .groups = "drop"
+  ) %>%
+  arrange(Sample)
+
+# Add Total Row across all samples
+total_row <- filtering_summary_per_sample %>%
+  summarise(
+    Sample = "Total",
+    across(where(is.numeric), sum)
+  )
+
+filtering_summary_final <- bind_rows(filtering_summary_per_sample, total_row)
+
+print("--- SUMMARY TABLE OF FILTERED CELLS ---")
+print(as.data.frame(filtering_summary_final))
+
+# ==============================================================================
+# STEP 4: EXPORT TO CSV
+# ==============================================================================
+dir.create("results/supplements", recursive = TRUE, showWarnings = FALSE)
+
+write.csv(
+  filtering_summary_final,
+  file = "results/supplements/2V_06_Filtering_Summary_per_Sample.csv",
+  row.names = FALSE
+)
+
+cat("\nSummary table successfully written to: results/supplements/2V_06_Filtering_Summary_per_Sample.csv\n")
+```
+

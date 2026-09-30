@@ -47,6 +47,18 @@ gene_symbol <- read.table("data/all_genes.csv", header = TRUE, sep = ",")
 seurat_object <- readRDS("ws/02_astro_subset/1DP_02_seurat_annotated_astro.rds")
 ```
 
+```{r}
+#number of Reac ast
+seurat_mcao_reac <- subset(
+  seurat_object, 
+  subset = Condition == "MCAO" & 
+    seurat_annotated_astro == "Reac" & 
+    Isolation_pub %in% c("Miltenyi", "WorthGentle")
+)
+
+# Print the exact cell counts
+table(seurat_mcao_reac$Isolation_pub)
+```
 
 ###########################################
 # DEA Reac vs Hom comparison of ISOL PROT
@@ -77,18 +89,18 @@ de_results$color_group <- ifelse(
 )
 
 
-# --- STEP 3: Dynamically Isolate Top 5 Significance Drivers per Side ---
+# --- STEP 3: Dynamically Isolate Top 5 Significance Drivers per Side (NO GENES FILTERED) ---
 top_5_worthgentle <- de_results %>%
   filter(significant & avg_log2FC > 0) %>%
-  arrange(p_val_adj) %>%
+  arrange(p_val_adj, desc(abs(avg_log2FC))) %>%  # Tie-breaker for genes sharing the lowest p-value
   head(5)
 
 top_5_miltenyi <- de_results %>%
   filter(significant & avg_log2FC < 0) %>%
-  arrange(p_val_adj) %>%
+  arrange(p_val_adj, desc(abs(avg_log2FC))) %>%
   head(5)
 
-# Combine both target sets into a single data frame for ggrepel mapping
+# Combine target sets for point highlighting
 gene_inter <- bind_rows(top_5_worthgentle, top_5_miltenyi)
 
 
@@ -98,7 +110,6 @@ deg_count   <- sum(de_results$significant, na.rm = TRUE)
 deg_up      <- sum(de_results$significant & de_results$avg_log2FC > 0, na.rm = TRUE)
 deg_down    <- sum(de_results$significant & de_results$avg_log2FC < 0, na.rm = TRUE)
 
-# FIXED: Synchronized subtitle arrow labels to match ident.1 (WorthGentle) vs ident.2 (Miltenyi)
 subtitle_text <- paste0(
   "#DEGs: ", deg_count, " (", deg_down, " ↑ | ", deg_up, " ↑) | Total: ", total_genes,
   "\n(← UP in Miltenyi | UP in WorthGentle →)"
@@ -107,64 +118,74 @@ subtitle_text <- paste0(
 
 # --- STEP 5: Generate the Volcano Plot Canvas ---
 p_volcano <- ggplot(data = de_results, aes(x = avg_log2FC, y = -log10(p_val_adj))) +
-  # Render standard background gene cloud
+  # Background gene cloud
   geom_point(aes(colour = color_group),
              alpha = 0.6,
              shape = 16,
              size  = 1) +
   
-  # Highlight focus target dots with high-contrast structural borders
-  geom_point(data = bind_rows(top_5_worthgentle, top_5_miltenyi),
+  # Highlight target points
+  geom_point(data = gene_inter,
              aes(x = avg_log2FC, y = -log10(p_val_adj)),
              shape  = 21,
              fill   = "#444444",
              color  = "#444444",
-             size   = 1.4,
-             stroke = 0.4) +
+             size   = 1.3,
+             stroke = 0.3) +
              
-  # --- ANTI-OVERLAP LAYER 1: WorthGentle Labels (Pushed to the Right) ---
+  # --- WorthGentle Labels (Repelled in 2D to avoid collision) ---
   geom_text_repel(data = top_5_worthgentle,
                   aes(label = gene_symbol),
-                  size               = 1.8,       # Slightly smaller font for a 5x5 cm plot
-                  box.padding        = 0.3,       
-                  point.padding      = 0.2,       
-                  color              = "#444444",
-                  max.overlaps       = Inf,       
-                  force              = 3,         
-                  direction          = "y",       # Repels strictly vertically along a column axis
-                  nudge_x            = 2.0,       # Pushes labels away from the dense center toward the right edge
-                  hjust              = 0,         # Left-aligned text
-                  segment.size       = 0.2,   
-                  segment.color      = "#444444",
-                  min.segment.length = 0          
+                  size               = 1.8,
+                  box.padding        = 0.45,
+                  point.padding      = 0.25,
+                  color              = "#222222",
+                  max.overlaps       = Inf,
+                  force              = 8,
+                  force_pull         = 0.6,
+                  direction          = "both",       # Allows 2D repulsion to untangle clumped dots
+                  nudge_x            = 1.4,
+                  nudge_y            = 1.2,
+                  hjust              = 0,
+                  segment.size       = 0.2,
+                  segment.color      = "#666666",
+                  min.segment.length = 0,
+                  seed               = 42
   ) +
   
-  # --- ANTI-OVERLAP LAYER 2: Miltenyi Labels (Pushed safely to the Left) ---
+  # --- Miltenyi Labels (Repelled in 2D to avoid collision) ---
   geom_text_repel(data = top_5_miltenyi,
                   aes(label = gene_symbol),
-                  size               = 1.8,       
-                  box.padding        = 0.3,       
-                  point.padding      = 0.2,       
-                  color              = "#444444",
-                  max.overlaps       = Inf,       
-                  force              = 3,         
-                  direction          = "y",       
-                  nudge_x            = -2.0,      # Pushes labels away from the center toward the left edge
-                  hjust              = 1,         # Right-aligned text so it never collides with the Y-axis
-                  segment.size       = 0.2,   
-                  segment.color      = "#444444",
-                  min.segment.length = 0          
+                  size               = 1.8,
+                  box.padding        = 0.45,
+                  point.padding      = 0.25,
+                  color              = "#222222",
+                  max.overlaps       = Inf,
+                  force              = 8,
+                  force_pull         = 0.6,
+                  direction          = "both",
+                  nudge_x            = -1.4,
+                  nudge_y            = 1.2,
+                  hjust              = 1,
+                  segment.size       = 0.2,
+                  segment.color      = "#666666",
+                  min.segment.length = 0,
+                  seed               = 42
   ) +
   
-  # Insert clear significance threshold crosshairs
+  # Threshold crosshairs
   geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "#B6C7DB", linewidth = 0.3) +
   geom_vline(xintercept = c(-fc_threshold, fc_threshold), linetype = "dashed", color = "#B6C7DB", linewidth = 0.3) +
+  
+  # Extra margin padding so repelled labels don't get cut off at canvas borders
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.18))) +
+  scale_x_continuous(expand = expansion(mult = c(0.15, 0.15))) +
   
   labs(
     title    = "Reac WorthGentle vs. Reac Miltenyi",
     subtitle = subtitle_text,
-    x        = "Log2 fold change",
-    y        = "-Log10 adjusted p-value"
+    x        = expression(log[2]~"fold change"),
+    y        = expression(-log[10]~"adjusted "*italic(P)*"-value")
   ) +
   
   scale_color_manual(
@@ -188,19 +209,13 @@ p_volcano <- ggplot(data = de_results, aes(x = avg_log2FC, y = -log10(p_val_adj)
   ) +
   guides(color = guide_legend(override.aes = list(size = 2, alpha = 1)))
 
-# Preview chart canvas in console
-p_volcano
-
-# Save panel back to master object environment array
-plots[["volcano_with_background"]] <- p_volcano
-
-# Export crisp high-res tiff
+# Export crisp high-res tiff (slightly wider width gives 10 labels room to spread)
 ggsave(
   filename    = "results/03_astro_DEA_GO/2V_03_volcano_Miltenyi_vs_WorthGentle.tiff",
-  plot        = plots[["volcano_with_background"]],
+  plot        = p_volcano,
   device      = "tiff",
-  width       = 5.1,
-  height      = 5.8,
+  width       = 5.4,
+  height      = 6.1,
   units       = "cm",
   dpi         = 600,
   compression = "lzw",
@@ -213,7 +228,7 @@ ggsave(
 #  VIOLIN PLOT WITH REACTIVE MARKERS
 ####################################
 # ==========================================
-# STEP 1: FILTER TO MCAO REAC & BALANCE CELLS
+# STEP 1: FILTER TO MCAO REAC
 # ==========================================
 seurat_object_sub <- subset(
   seurat_object, 
@@ -225,30 +240,15 @@ seurat_object_sub <- subset(
 # Clean up factor levels
 seurat_object_sub$Isolation_pub <- droplevels(factor(seurat_object_sub$Isolation_pub, levels = c("Miltenyi", "WorthGentle")))
 
-# Dynamically find the minimum cell count between the two protocols to downsample
-protocol_counts <- table(seurat_object_sub$Isolation_pub)
-min_cells <- min(protocol_counts)
-message("Downsampling both isolation protocols to a balanced: ", min_cells, " cells each.")
-
-# Downsample using Idents
-set.seed(42)
-Idents(seurat_object_sub) <- "Isolation_pub"
-seurat_object_sub <- subset(seurat_object_sub, downsample = min_cells)
-
-# Verify perfect 1:1 balance group sizing
-table(seurat_object_sub$Isolation_pub)
-
-
 # ==========================================
 # STEP 2: TRANSLATE & COMPUTE SINGLE MODULE SCORE
 # ==========================================
-# Integrated your focus gene set here
-my_chosen_genes <- c("Gfap", "Vim", "Cst3", "Igfbp5", "Aqp4", "C4b", "Ctsb")#
+my_chosen_genes <- c("Gfap", "Vim", "Cst3", "Igfbp5", "Aqp4", "C4b", "Ctsb")
 
 # Translate Mouse Symbols to ENSEMBL IDs
 chosen_genes_ensembl <- Symbol_to_ENSEMBL(my_chosen_genes)
 
-# Ensure features are present in the active RNA matrix assay to prevent failure drops
+# Ensure features are present in the active RNA matrix assay
 available_features <- rownames(seurat_object_sub[["RNA"]])
 valid_genes_ensembl <- intersect(chosen_genes_ensembl, available_features)
 
@@ -261,7 +261,6 @@ seurat_object_sub <- AddModuleScore(
   assay    = "RNA"        
 )
 
-
 # ==========================================
 # STEP 3: EXTRACT PLOTTING DATA FRAME
 # ==========================================
@@ -271,77 +270,24 @@ plot_df <- FetchData(
 )
 plot_df$CellID <- rownames(plot_df)
 
-# Final formatting configuration
 target_violin_df <- plot_df %>% 
   filter(CellID %in% colnames(seurat_object_sub)) %>% 
   mutate(Isolation_pub = factor(Isolation_pub, levels = c("Miltenyi", "WorthGentle")))
 
+# Compute y limits cleanly without extra bracket headspace
+max_y <- max(target_violin_df$Custom_Gene_Score1, na.rm = TRUE)
+min_y <- min(target_violin_df$Custom_Gene_Score1, na.rm = TRUE)
+upper_limit <- max_y * 1.08
 
 # ==========================================
-# STEP 4: COMPUTE STATISTICS DIRECTLY IN BASE R
+# STEP 4: GENERATE SINGLE PLOT CANVAS (NO SIGNIFICANCE)
 # ==========================================
-# Run the Wilcoxon Rank-Sum test directly 
-wilcox_res <- wilcox.test(Custom_Gene_Score1 ~ Isolation_pub, data = target_violin_df)
-p_val <- wilcox_res$p.value
-
-# Map the exact p-value into your standard significance symbols
-p_signif <- case_when(
-  p_val < 0.0001 ~ "***",
-  p_val < 0.001  ~ "**",
-  p_val < 0.01   ~ "*",
-  p_val < 0.05   ~ "*",
-  TRUE           ~ "ns"
-)
-
-max_y  <- max(target_violin_df$Custom_Gene_Score1, na.rm = TRUE)
-min_y  <- min(target_violin_df$Custom_Gene_Score1, na.rm = TRUE)
-upper_limit <- max_y * 1.35
-text_y_position <- max_y * 1.1
-
-
-# ==========================================
-# STEP 5: GENERATE SINGLE PLOT CANVAS
-# ==========================================
-
-
-# Define coordinates for the significance bracket line
-# This draws a clean, sharp bracket: |---| between group 1 (Miltenyi) and group 2 (WorthGentle)
-bracket_y_top  <- max_y * 1.15
-bracket_y_drop <- max_y * 1.11
-
-bracket_df <- data.frame(
-  x = c(1, 1, 2, 2),
-  y = c(bracket_y_drop, bracket_y_top, bracket_y_top, bracket_y_drop)
-)
-
 v_custom <- violin_boxplot(target_violin_df, "Custom_Gene_Score1", get_label("mod_score")) +
   scale_fill_manual(values = col_list[["isol_prot"]]) +
-  
-  # --- NEW: Draw the manual significance bracket line ---
-  geom_path(
-    data     = bracket_df, 
-    aes(x = x, y = y), 
-    inherit.aes = FALSE, 
-    color    = "#444444", 
-    linewidth = 0.3
-  ) +
-  
-  # --- FIXED: Adjusted star label to sit perfectly centered right above the bracket line ---
-  annotate(
-    "text", 
-    x        = 1.5, 
-    y        = bracket_y_top + (max_y * 0.18), 
-    label    = p_signif, 
-    size     = 2.2, 
-    fontface = "bold", 
-    colour   = "#444444"
-  ) +
-  
   scale_y_continuous(
     limits = c(min_y, upper_limit),
     breaks = seq(from = round(min_y * 4) / 4, to = upper_limit, by = 0.5)
   ) +
-  
   labs(
     title    = "Reactive astrocyte markers",
     subtitle = "(MCAO Reac astrocytes)",
@@ -357,7 +303,7 @@ v_custom <- violin_boxplot(target_violin_df, "Custom_Gene_Score1", get_label("mo
   )
 
 # ==========================================
-# STEP 6: CACHE AND EXPORT PANEL TO TIFF
+# STEP 5: CACHE AND EXPORT PANEL TO TIFF
 # ==========================================
 v_custom
 
@@ -374,7 +320,6 @@ ggsave(
   compression = "lzw",  
   bg          = "white" 
 )
-
 ```
 
 ```{r}
@@ -382,7 +327,6 @@ target_violin_df %>%
   group_by(Isolation_pub) %>%
   summarise(median_score = median(Custom_Gene_Score1, na.rm = TRUE))
 ```
-
 
 #######
 # GO
@@ -412,14 +356,14 @@ if (nrow(df_worth) > 0) {
   df_worth <- df_worth %>%
     mutate(Direction = "WorthGentle") %>%
     arrange(desc(Count), p.adjust) %>%
-    slice_head(n = 7) 
+    slice_head(n = 10) 
 }
 
 if (nrow(df_miltenyi) > 0) {
   df_miltenyi <- df_miltenyi %>%
     mutate(Direction = "Miltenyi") %>%
     arrange(desc(Count), p.adjust) %>%
-    slice_head(n = 4)
+    slice_head(n = 10)
 }
 
 plot_df <- rbind(df_worth, df_miltenyi)
@@ -458,8 +402,10 @@ p_unified_go <- ggplot(plot_df, aes(x = "Pairwise Comparison", y = Description, 
     name = "p.adjust"
   ) +
   scale_size_continuous(
-    range  = c(1.5, 4.5), 
-    name   = "Gene \ncount"
+    range  = c(0.5, 1.5), 
+    name   = "Gene \ncount",
+    breaks = scales::breaks_pretty(n = 4),          # Generates clean integer steps (e.g., 15, 20, 25)
+    labels = scales::label_number(accuracy = 1)     # Forces whole numbers without decimals (.0)
   ) +
   
   scale_y_discrete(position = "right") +
@@ -540,8 +486,8 @@ ggsave(
   filename    = "results/03_astro_DEA_GO/2V_03_dotplotGO.tiff",               
   plot        = plots[["go_unified_facet"]],           
   device      = "tiff",                          
-  width       = 6.3,              
-  height      = 6,                                
+  width       = 6.5,              
+  height      = 7,                                
   units       = "cm", 
   dpi         = 600,            
   compression = "lzw",  

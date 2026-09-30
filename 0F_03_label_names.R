@@ -35,7 +35,7 @@ gene_labels <- list(
 
   # validaiton
   "Gfap_per" = bquote(italic("Actb")^"+" * italic("Aldh1l1")^"+" * italic("Gfap")^"+" ~ "cells (%)"),
-  "replicate" =  bquote("Tech. \nreplicate"),
+  "replicate" =  bquote("Exp. \nbatches"),
   
   #analysis
   "DEG" = bquote("DEG status")

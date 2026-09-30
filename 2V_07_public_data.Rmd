@@ -55,9 +55,52 @@ lapply(folders, function(f) if (!dir.exists(f)) dir.create(f, recursive = TRUE))
 ```
 
 ```{r}
-plots <- list()
-pub_data <- read.csv("data/astrocyte_yield_public_data.csv", stringsAsFactors = FALSE)
+# 1. Define literature data directly in R (no CSV loading required)
+pub_data <- data.frame(
+  Citation = c(
+    "Zheng et al. 2021",
+    "Guo et al. 2021",
+    "Ma et al. 2022",
+    "Kim et al. 2025",
+    "Wu et al. 2023",
+    "Li et al. 2023",
+    "Jin et al. 2023",
+    "Song et al. 2024"
+  ),
+  Astrocyte.yield = c(
+    "~5-10",
+    "5.9",
+    "8",
+    "14",
+    "19",
+    "2.4",
+    "2.6",
+    "~15-20"
+  ),
+  GFAP.astrocytes = c(
+    "~30",
+    "NI",
+    "~40",
+    "NI",
+    "NI",
+    "NI",
+    "NI",
+    "NI"
+  ),
+  Astro_Gfap = c(
+    "~5-10% (~30%)",
+    "5.9% (?)",
+    "8% (~40%)",
+    "14% (?)",
+    "19% (?)",
+    "2.4% (?)",
+    "2.6% (?)",
+    "~15-20% (?)"
+  ),
+  stringsAsFactors = FALSE
+)
 ```
+
 
 ```{r}
 library(dplyr)

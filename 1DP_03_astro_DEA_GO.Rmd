@@ -78,10 +78,11 @@ mcao_reac_seu <- subset(
 mcao_reac_seu$Isolation_pub <- droplevels(mcao_reac_seu$Isolation_pub)
 
 # 3. Downsample to perfectly balance cell counts
-min_cells_reac <- min(table(mcao_reac_seu$Isolation_pub))
+#min_cells_reac <- min(table(mcao_reac_seu$Isolation_pub))
 Idents(mcao_reac_seu) <- "Isolation_pub"
-set.seed(142) 
-mcao_reac_balanced <- subset(mcao_reac_seu, downsample = min_cells_reac)
+#set.seed(142) 
+#mcao_reac_balanced <- subset(mcao_reac_seu, downsample = min_cells_reac)
+mcao_reac_balanced <- mcao_reac_seu
 
 # 4. Run FindMarkers WITHOUT a logfc or p-value cutoff to capture all genes
 DefaultAssay(mcao_reac_balanced) <- "RNA"
@@ -103,49 +104,43 @@ reac_miltenyi_vs_gentle_all_genes$comparison  <- "WorthGentle_Reac_vs_Miltenyi_R
 saveRDS(reac_miltenyi_vs_gentle_all_genes, "ws/03_astro_DEA_GO/1DP_03_DEA_MCAO_Reac_WorthGentle_vs_Miltenyi.rds")
 message("Saved complete background matrix. Total genes: ", nrow(reac_miltenyi_vs_gentle_all_genes))
 
-#Excel
+#csv
 
 df_up   <- reac_miltenyi_vs_gentle_all_genes %>% filter(avg_log2FC > 0) %>% arrange(p_val_adj)
 df_down <- reac_miltenyi_vs_gentle_all_genes %>% filter(avg_log2FC < 0) %>% arrange(p_val_adj)
 
-#Initialize Excel Workbook
-wb <- createWorkbook()
+# ==========================================
+# COMBINE AND PREPARE DEA DATA FOR CSV EXPORT
+# ==========================================
+# Combine both directions, ensuring the direction/comparison is clearly labeled
+dea_combined <- bind_rows(
+  df_up %>% mutate(direction = "WorthGentle_UP"),
+  df_down %>% mutate(direction = "Miltenyi_UP")
+) %>%
+  # Select core metrics and order logically
+  dplyr::select(
+    gene, 
+    gene_symbol, 
+    avg_log2FC, 
+    pct.1, 
+    pct.2, 
+    p_val, 
+    p_val_adj, 
+    comparison,
+    direction
+  ) %>%
+  arrange(direction, p_val_adj, desc(abs(avg_log2FC)))
 
-# --- MINIMAL BASIC STYLES ---
-basic_header <- createStyle(textDecoration = "bold", halign = "center") 
-p_val_style  <- createStyle(numFmt = "0.00E+00")
-pct_style    <- createStyle(numFmt = "0.0%")
-fc_style     <- createStyle(numFmt = "0.00")
+# ==========================================
+# EXPORT AS CSV
+# ==========================================
+write.csv(
+  x         = dea_combined,
+  file      = "results/supplements/1DP_03_DEG_MCAO_Reac_Astro_MCAO_WorthGentle_vs_Miltenyi.csv",
+  row.names = FALSE
+)
 
-# Minimal function to write tabs
-populate_dea_sheet <- function(wb, sheet_name, df_data) {
-  addWorksheet(wb, sheetName = sheet_name, gridLines = TRUE)
-  
-  # Select and order core Seurat metrics
-  export_df <- df_data %>% 
-    dplyr::select(gene, gene_symbol, avg_log2FC, pct.1, pct.2, p_val, p_val_adj, comparison)
-  
-  # Write data to sheet (Row 1 will be the headers)
-  writeData(wb, sheet = sheet_name, x = export_df, withFilter = TRUE)
-  
-  # Apply basic formatting rules
-  addStyle(wb, sheet = sheet_name, style = basic_header, rows = 1, cols = 1:8)
-  addStyle(wb, sheet = sheet_name, style = fc_style,     rows = 2:(nrow(export_df)+1), cols = 3)
-  
-  # --- FIXED: Added gridExpand = TRUE for multi-row + multi-column styling ---
-  addStyle(wb, sheet = sheet_name, style = pct_style,    rows = 2:(nrow(export_df)+1), cols = 4:5, gridExpand = TRUE)
-  addStyle(wb, sheet = sheet_name, style = p_val_style,  rows = 2:(nrow(export_df)+1), cols = 6:7, gridExpand = TRUE)
-  
-  # Auto-fit columns to avoid truncated names or text wrapping issues
-  setColWidths(wb, sheet = sheet_name, cols = 1:8, widths = "auto")
-}
-
-#Generate both directional data sheets
-populate_dea_sheet(wb, "WorthGentle_UP", df_up)
-populate_dea_sheet(wb, "Miltenyi_UP", df_down)
-
-#Save final styled workbook
-saveWorkbook(wb, "results/supplements/1DP_03_DEG_MCAO_Reac_Astro_MCAO_WorthGentle_vs_Miltenyi.xlsx", overwrite = TRUE)
+message("Saved DEA CSV successfully. Total rows: ", nrow(dea_combined))
 ```
 
 ####################################################
@@ -232,43 +227,174 @@ if(nrow(go_worth_df) > 0)    go_worth_df    <- go_worth_df %>% rename(geneSymbol
 if(nrow(go_miltenyi_df) > 0) go_miltenyi_df <- go_miltenyi_df %>% rename(geneSymbol = geneID)
 
 # ==========================================
-# STEP 2: INITIALIZE THE EXCEL WORKBOOK
+# STEP 2 & 3: COMBINE AND FORMAT GO DATA
 # ==========================================
-wb <- createWorkbook()
+target_cols <- c("ID", "Description", "GeneRatio", "BgRatio", "pvalue", "p.adjust", "qvalue", "geneSymbol", "Count")
 
-# ==========================================
-# STEP 3: FORMAT AND EXPORT DATA TO TABS
-# ==========================================
-
-# --- Tab 1: WorthGentle Enriched ---
+# Prepare WorthGentle terms
+sub_data_worth <- data.frame()
 if (nrow(go_worth_df) > 0) {
   sub_data_worth <- go_worth_df %>%
-    dplyr::select("ID", "Description", "GeneRatio", "BgRatio", "pvalue", "p.adjust", "qvalue", "geneSymbol", "Count") %>%
-    arrange(p.adjust)
-  
-  sheet_name_worth <- "WorthGentle_UP"
-  addWorksheet(wb, sheetName = sheet_name_worth)
-  writeData(wb, sheet = sheet_name_worth, x = sub_data_worth, withFilter = TRUE)
-} else {
-  message("No significant WorthGentle terms to write.")
+    dplyr::select(all_of(target_cols)) %>%
+    mutate(Direction = "WorthGentle_UP")
 }
 
-# --- Tab 2: Miltenyi Enriched ---
+# Prepare Miltenyi terms
+sub_data_miltenyi <- data.frame()
 if (nrow(go_miltenyi_df) > 0) {
   sub_data_miltenyi <- go_miltenyi_df %>%
-    dplyr::select("ID", "Description", "GeneRatio", "BgRatio", "pvalue", "p.adjust", "qvalue", "geneSymbol", "Count") %>%
-    arrange(p.adjust)
-  
-  sheet_name_miltenyi <- "Miltenyi_UP"
-  addWorksheet(wb, sheetName = sheet_name_miltenyi)
-  writeData(wb, sheet = sheet_name_miltenyi, x = sub_data_miltenyi, withFilter = TRUE)
-} else {
-  message("No significant Miltenyi terms to write.")
+    dplyr::select(all_of(target_cols)) %>%
+    mutate(Direction = "Miltenyi_UP")
 }
 
-# ==========================================
-# STEP 4: SAVE WORKBOOK
-# ==========================================
+# Combine into a single structured data frame
+go_combined <- bind_rows(sub_data_worth, sub_data_miltenyi) %>%
+  dplyr::select(Direction, all_of(target_cols)) %>%
+  arrange(Direction, p.adjust)
 
-saveWorkbook(wb, "results/supplements/1DP_03_GO_BP_Reac_Astro_MCAO_WorthGentle_vs_Miltenyi.xlsx", overwrite = TRUE)
+# ==========================================
+# STEP 4: SAVE AS CSV
+# ==========================================
+if (nrow(go_combined) > 0) {
+  write.csv(
+    x         = go_combined,
+    file      = "results/supplements/1DP_03_GO_BP_Reac_Astro_MCAO_WorthGentle_vs_Miltenyi.csv",
+    row.names = FALSE
+  )
+  message("Saved GO CSV successfully. Total rows: ", nrow(go_combined))
+} else {
+  message("Warning: No significant GO terms found across either condition; CSV not written.")
+}
 ```
+
+```{r}
+library(dplyr)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+library(AnnotationDbi)
+
+# ==============================================================================
+# STEP 1: LOAD DEA DATA & CLEAN ENSEMBL IDS
+# ==============================================================================
+dea_data <- readRDS("ws/03_astro_DEA_GO/1DP_03_DEA_MCAO_Reac_WorthGentle_vs_Miltenyi.rds")
+
+# Strip Ensembl trailing version tags (e.g., ENSMUSG00000001234.5 -> ENSMUSG00000001234)
+dea_data <- dea_data %>%
+  mutate(gene_clean = gsub("\\..*", "", gene))
+
+# ==============================================================================
+# STEP 2: CATEGORIZE BY STATISTICAL SIGNIFICANCE & DIRECTION
+# ==============================================================================
+# 1. Non-significant / low fold change genes (filtered out before GO)
+dea_not_significant <- dea_data %>%
+  filter(p_val_adj >= 0.05 | abs(avg_log2FC) <= 0.65 | is.na(p_val_adj))
+
+# 2. Significant candidate genes heading to GO
+worth_candidates <- dea_data %>%
+  filter(p_val_adj < 0.05 & avg_log2FC > 0.65)
+
+miltenyi_candidates <- dea_data %>%
+  filter(p_val_adj < 0.05 & avg_log2FC < -0.65)
+
+cat("Total genes in background DEA:", nrow(dea_data), "\n")
+cat("Excluded by DEA thresholds (p_adj >= 0.05 or |log2FC| <= 0.65):", nrow(dea_not_significant), "\n")
+cat("WorthGentle significant candidate genes:", nrow(worth_candidates), "\n")
+cat("Miltenyi significant candidate genes:", nrow(miltenyi_candidates), "\n\n")
+
+# ==============================================================================
+# STEP 3: FUNCTION TO IDENTIFY UNMAPPED / UNANNOTATED GENES IN ORG.MM.EG.DB
+# ==============================================================================
+audit_go_input_genes <- function(candidate_df, group_name) {
+  ensembl_ids <- unique(candidate_df$gene_clean)
+  
+  # A. Check mapping to Entrez ID
+  map_entrez <- AnnotationDbi::select(
+    org.Mm.eg.db,
+    keys     = ensembl_ids,
+    keytype  = "ENSEMBL",
+    columns  = c("ENTREZID", "SYMBOL")
+  ) %>% distinct(ENSEMBL, .keep_all = TRUE)
+  
+  # Unmapped to Entrez
+  unmapped_entrez <- map_entrez %>%
+    filter(is.na(ENTREZID)) %>%
+    pull(ENSEMBL)
+  
+  # B. Check mapping to GO Biological Process (BP) terms
+  mapped_entrez_ids <- na.omit(map_entrez$ENTREZID)
+  
+  map_go <- AnnotationDbi::select(
+    org.Mm.eg.db,
+    keys     = mapped_entrez_ids,
+    keytype  = "ENTREZID",
+    columns  = c("GO", "ONTOLOGY")
+  ) %>% filter(ONTOLOGY == "BP")
+  
+  entrez_with_go_bp <- unique(na.omit(map_go$ENTREZID))
+  
+  # Entrez IDs with NO Biological Process annotations
+  entrez_no_go_bp <- setdiff(mapped_entrez_ids, entrez_with_go_bp)
+  ensembl_no_go_bp <- map_entrez %>%
+    filter(ENTREZID %in% entrez_no_go_bp) %>%
+    pull(ENSEMBL)
+  
+  # Genes successfully entering the hypergeometric test
+  ensembl_valid_go <- map_entrez %>%
+    filter(ENTREZID %in% entrez_with_go_bp) %>%
+    pull(ENSEMBL)
+  
+  # Construct status table for all candidates
+  candidate_status <- candidate_df %>%
+    mutate(
+      GO_inclusion_status = case_when(
+        gene_clean %in% unmapped_entrez   ~ "Excluded: No Entrez ID in org.Mm.eg.db",
+        gene_clean %in% ensembl_no_go_bp  ~ "Excluded: No GO Biological Process annotation",
+        gene_clean %in% ensembl_valid_go  ~ "Included in GO hypergeometric test",
+        TRUE                              ~ "Excluded"
+      )
+    )
+  
+  cat(paste0("--- ", group_name, " Audit Summary ---\n"))
+  cat("Total candidate DEGs:", nrow(candidate_df), "\n")
+  cat("  -> Included in GO BP test:", length(ensembl_valid_go), "\n")
+  cat("  -> Excluded (No Entrez ID):", length(unmapped_entrez), "\n")
+  cat("  -> Excluded (No GO BP terms):", length(ensembl_no_go_bp), "\n\n")
+  
+  return(candidate_status)
+}
+
+# ==============================================================================
+# STEP 4: EXECUTE AUDIT FOR BOTH PROTOCOLS
+# ==============================================================================
+worth_audit    <- audit_go_input_genes(worth_candidates, "WorthGentle UP")
+miltenyi_audit <- audit_go_input_genes(miltenyi_candidates, "Miltenyi UP")
+
+# ==============================================================================
+# STEP 5: EXTRACT ONLY THE EXCLUDED GENES & SAVE TO CSV
+# ==============================================================================
+# Filter to genes that met DEA significance but could not be evaluated in GO
+worth_excluded <- worth_audit %>%
+  filter(GO_inclusion_status != "Included in GO hypergeometric test") %>%
+  dplyr::select(gene, gene_clean, gene_symbol, avg_log2FC, p_val_adj, GO_inclusion_status)
+
+miltenyi_excluded <- miltenyi_audit %>%
+  filter(GO_inclusion_status != "Included in GO hypergeometric test") %>%
+  dplyr::select(gene, gene_clean, gene_symbol, avg_log2FC, p_val_adj, GO_inclusion_status)
+
+# Combine into a single export table
+all_deg_go_excluded <- bind_rows(
+  worth_excluded %>% mutate(Direction = "WorthGentle_UP"),
+  miltenyi_excluded %>% mutate(Direction = "Miltenyi_UP")
+)
+
+# Export excluded candidate genes
+write.csv(
+  all_deg_go_excluded,
+  file = "results/supplements/DEGs_excluded_from_GO_due_to_unmapped_annotations.csv",
+  row.names = FALSE
+)
+
+message("Audit complete. Saved list of excluded candidate genes to: ")
+message("results/supplements/DEGs_excluded_from_GO_due_to_unmapped_annotations.csv")
+```
+
